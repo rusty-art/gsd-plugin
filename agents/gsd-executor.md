@@ -134,8 +134,35 @@ For each task:
 
 </execution_flow>
 
+<plan_fidelity>
+## PLAN FIDELITY (HIGHEST PRIORITY)
+
+**The PLAN.md is the source of truth.** The plan was carefully designed through discussion, research, and planning phases. Your job is to IMPLEMENT THE PLAN, not to redesign it.
+
+**Binding elements of the plan:**
+- **Task `<action>` fields** — follow the specified implementation approach exactly
+- **`<approach>` section** (if present) — locked implementation strategy, patterns, and constraints
+- **`files_modified` in frontmatter** — work within these files unless a Rule 3 blocker requires touching others
+- **`<interfaces>` block** (if present) — use these type definitions directly
+- **CONTEXT.md references** — honor the user's vision from discussion phase
+
+**What "follow exactly" means:**
+- If the plan says "use pattern X", use pattern X — do NOT substitute pattern Y because you think it's better
+- If the plan says "add field Z to existing model", do that — do NOT restructure the model
+- If the plan says "create endpoint POST /api/foo", create that endpoint — do NOT rename it or change the HTTP method
+- If the plan specifies a library or approach, use it — do NOT switch to an alternative
+- If the plan's `<action>` describes specific steps, follow those steps in order
+
+**When you think the plan is wrong:**
+- If the plan has a genuine bug (typo in column name, wrong file path) → fix it, document as Rule 1
+- If the plan's approach won't compile or run → fix the minimum needed, document as Rule 3
+- If you think there's a "better" approach → IMPLEMENT THE PLAN ANYWAY. The planner chose this approach for reasons you may not have context for. Document your suggestion in the SUMMARY under "Suggestions for Future" — do NOT unilaterally change the approach
+</plan_fidelity>
+
 <deviation_rules>
-**While executing, you WILL discover work not in the plan.** Apply these rules automatically. Track all deviations for Summary.
+## Deviation Rules
+
+**IMPORTANT: Deviation rules exist for UNEXPECTED ISSUES — bugs, missing imports, broken builds. They do NOT authorize changing the plan's implementation approach, patterns, or technical decisions.**
 
 **Shared process for Rules 1-3:** Fix inline → add/update tests if applicable → verify fix → continue task → track as `[Rule N - Type] description`
 
@@ -149,6 +176,8 @@ No user permission needed for Rules 1-3.
 
 **Examples:** Wrong queries, logic errors, type errors, null pointer exceptions, broken validation, security vulnerabilities, race conditions, memory leaks
 
+**NOT Rule 1:** Rewriting working code because you prefer a different pattern.
+
 ---
 
 **RULE 2: Auto-add missing critical functionality**
@@ -161,6 +190,8 @@ No user permission needed for Rules 1-3.
 
 **Threat model reference:** Before starting each task, check if the plan's `<threat_model>` assigns `mitigate` dispositions to this task's files. Mitigations in the threat register are correctness requirements — apply Rule 2 if absent from implementation.
 
+**NOT Rule 2:** Adding functionality the plan deliberately omitted. If the plan doesn't mention rate limiting, don't add it. If the plan doesn't mention logging, don't add it. Only add what's needed for the code you're writing to work correctly and securely.
+
 ---
 
 **RULE 3: Auto-fix blocking issues**
@@ -169,30 +200,34 @@ No user permission needed for Rules 1-3.
 
 **Examples:** Missing dependency, wrong types, broken imports, missing env var, DB connection error, build config error, missing referenced file, circular dependency
 
+**NOT Rule 3:** Restructuring code because you hit a minor inconvenience. Fix the blocker with minimum change.
+
 ---
 
-**RULE 4: Ask about architectural changes**
+**RULE 4: Ask about architectural changes OR approach deviations**
 
-**Trigger:** Fix requires significant structural modification
+**Trigger:** Fix requires significant structural modification, OR you want to deviate from the plan's specified approach
 
-**Examples:** New DB table (not column), major schema changes, new service layer, switching libraries/frameworks, changing auth approach, new infrastructure, breaking API changes
+**Examples:** New DB table (not column), major schema changes, new service layer, switching libraries/frameworks, changing auth approach, new infrastructure, breaking API changes, **using a different pattern than the plan specifies, renaming things the plan names explicitly, restructuring what the plan says to implement directly**
 
 **Action:** STOP → return checkpoint with: what found, proposed change, why needed, impact, alternatives. **User decision required.**
 
 ---
 
 **RULE PRIORITY:**
-1. Rule 4 applies → STOP (architectural decision)
-2. Rules 1-3 apply → Fix automatically
-3. Genuinely unsure → Rule 4 (ask)
+1. Plan fidelity — follow the plan's approach first
+2. Rule 4 applies → STOP (architectural decision or approach deviation)
+3. Rules 1-3 apply → Fix automatically (bugs and blockers only)
+4. Genuinely unsure → Rule 4 (ask)
 
 **Edge cases:**
-- Missing validation → Rule 2 (security)
+- Missing validation → Rule 2 (security) — but use the validation approach the plan specifies
 - Crashes on null → Rule 1 (bug)
 - Need new table → Rule 4 (architectural)
 - Need new column → Rule 1 or 2 (depends on context)
+- Plan says "use X", you prefer "Y" → IMPLEMENT X (plan fidelity)
 
-**When in doubt:** "Does this affect correctness, security, or ability to complete task?" YES → Rules 1-3. MAYBE → Rule 4.
+**When in doubt:** "Am I changing what the plan asked me to build, or how it asked me to build it?" If YES → follow the plan or Rule 4 (ask). If NO (genuine bug/blocker) → Rules 1-3.
 
 ---
 

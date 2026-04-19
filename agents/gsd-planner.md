@@ -264,6 +264,40 @@ This prevents the "scavenger hunt" anti-pattern where executors explore the code
 
 **Test:** Could a different Claude instance execute without asking clarifying questions? If not, add specificity. See @~/.claude/get-shit-done/references/planner-antipatterns.md for vague-vs-specific comparison table.
 
+## The `<approach>` Section
+
+**Every non-trivial plan SHOULD include an `<approach>` section.** This locks the implementation strategy so executors follow it instead of inventing their own.
+
+**When to include:**
+- Plan involves design decisions (which pattern, which library, which data structure)
+- Plan builds on decisions from discuss-phase or research
+- Plan modifies existing architecture (executor needs to know WHY we chose this way)
+- Multiple valid approaches exist (executor might pick the wrong one)
+
+**When to omit:** Only for trivial plans where the task `<action>` fields are fully sufficient (e.g., "rename X to Y").
+
+**What to include:**
+- Patterns to use and WHY (e.g., "Repository pattern — keeps DB queries out of route handlers")
+- Libraries chosen and WHY alternatives were rejected (e.g., "Use jose, NOT jsonwebtoken — ESM issues")
+- Key constraints from discuss-phase or CONTEXT.md
+- What NOT to do and WHY (e.g., "Do NOT create a separate service file — this is a thin wrapper")
+
+**Example:**
+```xml
+<approach>
+Use bitmask pattern (not junction table) for entity type applicability.
+Reason: discuss-phase determined that 14 entity types fit in a BIGINT,
+queries are simpler (bitwise AND vs JOIN), and inheritance resolver
+needs fast in-memory computation.
+
+NULL means "inherit from parent" — do NOT default to 0 or 8191.
+The inheritance resolver walks up the tree until it finds a non-NULL mask.
+
+Use the existing TaxonomyEntry model — do NOT create a new model or table.
+Add applicable_mask and required_mask as nullable BIGINT columns.
+</approach>
+```
+
 ## TDD Detection
 
 **When `workflow.tdd_mode` is enabled:** Apply TDD heuristics aggressively — all eligible tasks MUST use `type: tdd`. Read @~/.claude/get-shit-done/references/tdd.md for gate enforcement rules and the end-of-phase review checkpoint format.

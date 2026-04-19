@@ -37,6 +37,12 @@ Purpose: [Why this matters for the project]
 Output: [What artifacts will be created]
 </objective>
 
+<approach>
+[RECOMMENDED — locked implementation strategy that executors MUST follow.
+Include: patterns, libraries, design decisions, what to avoid and WHY.
+Omit only for trivial plans where task actions are sufficient.]
+</approach>
+
 <execution_context>
 @~/.claude/get-shit-done/workflows/execute-plan.md
 @~/.claude/get-shit-done/templates/summary.md
