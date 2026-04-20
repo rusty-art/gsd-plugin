@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Session Continuity
-status: executing
-stopped_at: Phase 4 context gathered
-last_updated: "2026-04-11T14:44:03.361Z"
-last_activity: 2026-04-11
+status: shipped
+stopped_at: v1.1 archived — milestone shipped 2026-04-20; tag v1.1 created
+last_updated: "2026-04-20T06:00:00Z"
+last_activity: 2026-04-20
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_phases: 2
+  completed_phases: 2
+  total_plans: 5
+  completed_plans: 5
   percent: 100
 ---
 
@@ -21,17 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Reduce GSD's per-turn token overhead and agent spawn latency without breaking multi-CLI compatibility
-**Current focus:** Phase 04 — checkpoint-and-resume
+**Current focus:** v1.1 shipped. Next action: `/gsd:new-milestone` to scope v1.2 (backlog seeded from v1.1 deferrals).
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
-Status: Phase 04 complete (human UAT partial — live /compact test pending), ready for Phase 05
-Last activity: 2026-04-20 - Completed quick task 260420-7tx: Include release notes body in upstream release notification mail
+Milestone: v1.1 shipped (2026-04-20) — all in-scope requirements satisfied, tagged, archived.
+Phase: none active. v1.1 phase artifacts moved to `.planning/milestones/v1.1-phases/`.
+Next action: `/gsd:new-milestone` to scope v1.2.
+Last activity: 2026-04-20 — v1.1 milestone archive + tag
 
 ```
-v1.1 Progress: [===_______] 33% (1/3 phases)
+v1.1 Progress: [==========] 100% SHIPPED
+v1.2: not yet scoped
 ```
 
 ## Performance Metrics
@@ -84,9 +85,12 @@ None.
 | 260419-lxi | Repo root cleanup — moved research artefacts into `_research/` | 2026-04-19 | — | [260419-lxi-repo-root-cleanup](./quick/260419-lxi-repo-root-cleanup/) |
 | 260420-7js | Upgrade gsd-plugin to upstream GSD 1.38.1 (plugin v2.38.1) and publish GitHub release | 2026-04-20 | 08477e0 | [260420-7js-upgrade-gsd-plugin-to-version-1-38-1-mat](./quick/260420-7js-upgrade-gsd-plugin-to-version-1-38-1-mat/) |
 | 260420-7tx | Include release notes body in upstream release notification mail | 2026-04-20 | c43a67c | [260420-7tx-cron-release-notes-in-mail](./quick/260420-7tx-cron-release-notes-in-mail/) |
+| 260420-rar | Advertise auto-resume across `/compact` in README features list | 2026-04-20 | 21ee182 | [260420-rar-readme-autoresume-feature](./quick/260420-rar-readme-autoresume-feature/) |
+| 260420-vfb | Hook commands fall back to newest cached plugin version when baked `${CLAUDE_PLUGIN_ROOT}` is pruned | 2026-04-20 | 7a80d47 | [260420-vfb-hook-version-fallback](./quick/260420-vfb-hook-version-fallback/) |
+| 260420-cns | Rewrite `/gsd-<skill>` → `/gsd:<skill>` across plugin content (273 replacements, 100 files) | 2026-04-20 | 5dfbbd2 | [260420-cns-command-colon-fix](./quick/260420-cns-command-colon-fix/) |
 
 ## Session Continuity
 
-Last session: 2026-04-10T17:11:40.189Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-checkpoint-and-resume/04-CONTEXT.md
+Last session: 2026-04-20T06:00:00Z (v1.1 archived + tagged)
+Stopped at: v1.1 shipped. REQUIREMENTS.md deleted (archived to milestones/v1.1-REQUIREMENTS.md). Fresh REQUIREMENTS.md will be generated for v1.2 via `/gsd:new-milestone`.
+Next action: `/gsd:new-milestone` to scope v1.2 (questioning → research → requirements → roadmap).
