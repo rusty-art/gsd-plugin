@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Session Continuity
-status: shipped
-stopped_at: v1.1 archived — milestone shipped 2026-04-20; tag v1.1 created
-last_updated: "2026-04-20T06:00:00Z"
-last_activity: 2026-04-20
+milestone: v1.2
+milestone_name: Upstream Resilience
+status: milestone-complete
+stopped_at: Phase 9 complete 2026-04-21 — umbrella orchestrator + README feature tour + CHANGELOG scaffold + 9-step post-sync checklist shipped; v1.2 ready for /gsd:complete-milestone
+last_updated: "2026-04-21T21:30:00Z"
+last_activity: 2026-04-21
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 3
+  completed_plans: 3
   percent: 100
 ---
 
@@ -21,18 +21,19 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Reduce GSD's per-turn token overhead and agent spawn latency without breaking multi-CLI compatibility
-**Current focus:** v1.1 shipped. Next action: `/gsd:new-milestone` to scope v1.2 (backlog seeded from v1.1 deferrals).
+**Current focus:** v1.2 Upstream Resilience — detect and hard-fail on upstream drift before it ships.
 
 ## Current Position
 
-Milestone: v1.1 shipped (2026-04-20) — all in-scope requirements satisfied, tagged, archived.
-Phase: none active. v1.1 phase artifacts moved to `.planning/milestones/v1.1-phases/`.
-Next action: `/gsd:new-milestone` to scope v1.2.
-Last activity: 2026-04-20 — v1.1 milestone archive + tag
+Milestone: v1.2 Upstream Resilience (milestone-complete — 3/3 phases done)
+Phase: 9 (Unified check-drift + docs) — executed 2026-04-21; v1.2 ready for `/gsd:complete-milestone`
+Status: Phase 9 executed 2026-04-21. `bin/maintenance/check-drift.cjs` umbrella spawns file-layout + handoff-schema + namespace-drift (--dry) detectors via `spawnSync`, aggregates results, consolidated PASS/FAIL + exit 0/1/2. Offline-deterministic; `check-upstream-schema.cjs` deliberately excluded per CONTEXT D-06. Not in CI (per-detector jobs stay for fast-feedback granularity). README has new `## Session continuity + drift resilience` section between `## What GSD Plugin provides` and `## What changed from upstream GSD`. `CHANGELOG.md` created at repo root in Keep-a-Changelog format with v2.38.2/v2.38.3/v2.38.4 entries + `[Unreleased]` stub; plugin-vs-upstream version distinction in section headers. `.planning/PROJECT.md` post-sync checklist expanded from 7 to 9 steps (new CHANGELOG step 5, new check-drift step 8; old steps renumbered). DRIFT-03 + DRIFT-02 (namespace portion) + DOCS-01 + DOCS-02 + MAINT-01 closed. v1.2 milestone complete; all 8 requirements satisfied.
+Last activity: 2026-04-21 — Phase 9 executed (4 tasks, 4 commits, ~5 min)
 
 ```
-v1.1 Progress: [==========] 100% SHIPPED
-v1.2: not yet scoped
+v1.2 Progress: [==========] 100% (3/3 phases — Phase 7 + 8 + 9 complete)
+v1.1 shipped: [==========] 100%
+v1.0 shipped: [==========] 100%
 ```
 
 ## Performance Metrics
@@ -45,6 +46,15 @@ v1.2: not yet scoped
 | Phase 02 | 2 | ~17min | 4 |
 | Phase 03 | 5 | ~35min | 16 |
 | **Total** | **10** | **~60min** | **27** |
+
+**v1.2 Summary:**
+
+| Phase | Plans | Duration | Tasks |
+|-------|-------|----------|-------|
+| Phase 07 | 1 | ~9min | 4 |
+| Phase 08 | 1 | ~12min | 6 |
+| Phase 09 | 1 | ~5min | 4 |
+| **Total** | **3** | **~26min** | **14** |
 
 ## Accumulated Context
 
@@ -88,9 +98,10 @@ None.
 | 260420-rar | Advertise auto-resume across `/compact` in README features list | 2026-04-20 | 21ee182 | [260420-rar-readme-autoresume-feature](./quick/260420-rar-readme-autoresume-feature/) |
 | 260420-vfb | Hook commands fall back to newest cached plugin version when baked `${CLAUDE_PLUGIN_ROOT}` is pruned | 2026-04-20 | 7a80d47 | [260420-vfb-hook-version-fallback](./quick/260420-vfb-hook-version-fallback/) |
 | 260420-cns | Rewrite `/gsd-<skill>` → `/gsd:<skill>` across plugin content (273 replacements, 100 files) | 2026-04-20 | 5dfbbd2 | [260420-cns-command-colon-fix](./quick/260420-cns-command-colon-fix/) |
+| 260421-u38 | Upgrade gsd-plugin to upstream GSD 1.38.3 (plugin v2.38.3) and publish GitHub release | 2026-04-21 | 1c75799 | [260421-u38-upgrade-gsd-plugin-to-version-1-38-3-mat](./quick/260421-u38-upgrade-gsd-plugin-to-version-1-38-3-mat/) |
 
 ## Session Continuity
 
-Last session: 2026-04-20T06:00:00Z (v1.1 archived + tagged)
-Stopped at: v1.1 shipped. REQUIREMENTS.md deleted (archived to milestones/v1.1-REQUIREMENTS.md). Fresh REQUIREMENTS.md will be generated for v1.2 via `/gsd:new-milestone`.
-Next action: `/gsd:new-milestone` to scope v1.2 (questioning → research → requirements → roadmap).
+Last session: 2026-04-21T21:30:00Z (Phase 9 executed)
+Stopped at: Phase 9 complete — v1.2 Upstream Resilience fully shipped. Umbrella orchestrator at `bin/maintenance/check-drift.cjs` (127 lines, executable, spawns 3 detectors via spawnSync, offline-deterministic). README has new `## Session continuity + drift resilience` section. `CHANGELOG.md` scaffold at repo root (Keep-a-Changelog, v2.38.2/3/4 entries + Unreleased stub). `.planning/PROJECT.md` post-sync checklist is now 9 steps with check-drift.cjs as a must-exit-0 gate. Commits: 0170c3f (feat Task 1), 7fd66c8 (docs Task 2), 34a348c (docs Task 3), f9561e7 (docs Task 4). All 8 v1.2 requirements (DRIFT-01/02/03, SCHEMA-01/02/03, DOCS-01/02, MAINT-01) satisfied. Duration ~5 min.
+Next action: `/gsd:complete-milestone` to close v1.2 — bump plugin version to `2.38.4` in the three manifests, tag `v2.38.4`, snapshot ROADMAP + REQUIREMENTS to `.planning/milestones/v1.2-*`, and push the release.

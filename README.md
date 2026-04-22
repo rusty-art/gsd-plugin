@@ -1,8 +1,8 @@
 # GSD Plugin -- Get Shit Done for Claude Code
 
-**Based on:** [GSD 1.38.1](https://github.com/gsd-build/get-shit-done/releases/tag/v1.38.1) base tree by **TACHES** (Lex Christopherson)
+**Based on:** [GSD 1.38.3](https://github.com/gsd-build/get-shit-done/releases/tag/v1.38.3) base tree by **TACHES** (Lex Christopherson)
 
-**Plugin version:** `2.38.2`
+**Plugin version:** `2.38.3`
 
 A performance-optimized plugin packaging of [GSD](https://github.com/gsd-build/get-shit-done) for Claude Code. Reduces per-turn token overhead by ~92%, adds MCP-backed project state, and bundles everything into a single-install plugin.
 
@@ -55,6 +55,12 @@ That's it. This installs everything: slash commands, agent definitions, hooks, a
 - **Execution context profiles** (dev, research, review) for role-specific behavior
 - **Templates and references** for planning artifacts, summaries, verification checklists, and thinking-model guidance
 - **Memory integration** -- phase outcomes persist across sessions via Claude Code's memdir
+
+## Session continuity + drift resilience
+
+**Session continuity.** When Claude Code runs `/compact` (manual or automatic), this plugin's PreCompact hook captures the current session state to `.planning/HANDOFF.json` — phase, plan position, uncommitted files, recent decisions, and a resumption hint. On the next session start, the SessionStart hook detects the handoff and auto-invokes `/gsd:resume-work` with zero user intervention. CLAUDE.md carries the same instruction as a fallback for CLIs where hooks don't fire. The handoff file is deleted after a successful resume so stale state doesn't trigger phantom resume attempts.
+
+**Drift resilience.** The plugin sits downstream of [upstream GSD](https://github.com/gsd-build/get-shit-done), which ships frequent feature releases. To catch structural drift before it reaches users, three detectors run in CI on every push: a **file-layout drift detector** flags dangling `@~/.claude/get-shit-done/*` references (e.g. skill files delegating to workflow bodies that don't exist in the plugin); a **HANDOFF schema validator** confirms `checkpoint.cjs` output matches the committed JSON Schema; and a **namespace drift check** fires if any `/gsd-<skill>` dash-style command refs have been reintroduced. Each detector has a committed ratchet baseline; regressions hard-fail. After each upstream sync, an additional **upstream schema drift detector** (`check-upstream-schema.cjs`) compares upstream's `/gsd:pause-work` output against our schema to catch format divergence early.
 
 ## What changed from upstream GSD
 
@@ -140,6 +146,15 @@ Enable auto-update for the marketplace in Claude Code settings and updates will 
 ```
 
 Note: Step 1 refreshes the marketplace index but does not upgrade the installed plugin. Step 2 is needed to install the new version.
+
+## Maintenance scripts
+
+Lightweight Node scripts live in `bin/maintenance/` for plugin upkeep tasks that aren't part of the user-facing CLI.
+
+- `node bin/maintenance/check-file-layout.cjs` — **File-layout drift detector.** Scans plugin content for `@~/.claude/get-shit-done/*` references, classifies each as repairable (plugin has a local counterpart) or genuinely missing, and compares counts to `tests/drift-baseline.json`. Exits non-zero if drift regresses beyond baseline. Runs in CI on every push and pull request. Pass `--dry` to preview or `--write-baseline` to regenerate the baseline after an intentional reduction.
+- `node bin/maintenance/rewrite-command-namespace.cjs` — **Namespace normalization.** Rewrites `/gsd-<skill>` → `/gsd:<skill>` across plugin content. Run after every upstream GSD sync since upstream uses the dash form.
+- `node bin/maintenance/check-handoff-schema.cjs` — **HANDOFF schema validator.** Generates a fresh `HANDOFF.json` in a tmp dir via `bin/lib/checkpoint.cjs` `writeCheckpoint()`, then validates it against `schema/handoff-v1.json` using ajv. Does not touch the real `.planning/HANDOFF.json` — isolates validation to a tmp dir that's cleaned up in a `finally` block. Runs in CI on every push and pull request (second job in `.github/workflows/check-drift.yml`). Exits 0 on schema-valid, 1 on violation, 2 on environment error (ajv missing, not at repo root, etc.).
+- `node bin/maintenance/check-upstream-schema.cjs` — **Upstream drift detector.** Downloads the latest upstream GSD release tarball (or uses the cached `/tmp/gsd-sync-<version>/` directory from a prior sync), extracts the `/gsd:pause-work` declared field list from `get-shit-done/workflows/pause-work.md`, and compares it to `schema/handoff-v1.json`. Does **not** run in CI — invoke after each upstream sync (manually, or via the sync quick-task template; see `.planning/PROJECT.md` "After each upstream GSD sync" checklist). Set `UPSTREAM_VERSION=v1.38.x` to target a specific version; otherwise falls back to `gh release view` for the latest tag.
 
 ## Migrating from legacy install
 
