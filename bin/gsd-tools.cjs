@@ -1320,6 +1320,37 @@ async function runCommand(command, args, cwd, raw, defaultValue) {
         } catch (err) {
           process.stderr.write('GSD: checkpoint save failed: ' + (err && err.message ? err.message : 'unknown error') + '\n');
         }
+      } else if (hookType === 'post-tool-use') {
+        // Periodic checkpoint to bridge the microcompact gap.
+        // CC's microcompact (services/compact/microCompact.ts) silently strips stale
+        // tool outputs without firing PreCompact. This handler writes a fresh
+        // HANDOFF.json after any tool call in the matcher (hooks.json:
+        // Bash|Edit|Write|MultiEdit|NotebookEdit + Read|Grep|Glob|WebFetch|WebSearch
+        // — broadened 2026-04-25 after a research-phase usage-cap incident showed
+        // the file-mutation-only matcher had an 18-min gap during read-heavy work).
+        // Throttled by HANDOFF.json mtime so we write at most once per 60s regardless
+        // of how often tools fire. Most-recent-wins via overwrite.
+        // Never crashes — 3s budget on PostToolUse.
+        try {
+          const { planningPaths } = require('./lib/core.cjs');
+          const checkpoint = require('./lib/checkpoint.cjs');
+          // Drain stdin to keep the hook pipeline unblocked; content is unused
+          try { fs.readFileSync(0, 'utf-8'); } catch { /* stdin may not be available */ }
+          const handoffPath = path.join(planningPaths(cwd).planning, 'HANDOFF.json');
+          const COOLDOWN_MS = 60_000;
+          let shouldWrite = true;
+          try {
+            const st = fs.statSync(handoffPath);
+            if (Date.now() - st.mtimeMs < COOLDOWN_MS) shouldWrite = false;
+          } catch { /* file does not exist — write */ }
+          if (shouldWrite) {
+            checkpoint.writeCheckpoint(cwd, { source: 'auto-postool', partial: false });
+            // Silent on success — PostToolUse fires often; chatter would be noisy
+          }
+        } catch (err) {
+          // Best effort — never break tool dispatch
+          process.stderr.write('GSD: post-tool checkpoint skipped: ' + (err && err.message ? err.message : 'unknown error') + '\n');
+        }
       }
       break;
     }

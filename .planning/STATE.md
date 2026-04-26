@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Upstream Resilience
-status: milestone-complete
-stopped_at: Phase 9 complete 2026-04-21 — umbrella orchestrator + README feature tour + CHANGELOG scaffold + 9-step post-sync checklist shipped; v1.2 ready for /gsd:complete-milestone
-last_updated: "2026-04-21T21:30:00Z"
-last_activity: 2026-04-21
+status: shipped
+stopped_at: v1.2 archived 2026-04-24 — milestone shipped; tags v1.2 + v2.38.4 created
+last_updated: "2026-04-24T00:00:00Z"
+last_activity: 2026-04-24
 progress:
   total_phases: 3
   completed_phases: 3
@@ -21,19 +21,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-11)
 
 **Core value:** Reduce GSD's per-turn token overhead and agent spawn latency without breaking multi-CLI compatibility
-**Current focus:** v1.2 Upstream Resilience — detect and hard-fail on upstream drift before it ships.
+**Current focus:** v1.2 shipped. Next action: `/gsd:new-milestone` to scope v1.3 (backlog: LIFE-02, LIFE-03, BEHAVIOR-01, UPST-03, UPST-04).
 
 ## Current Position
 
-Milestone: v1.2 Upstream Resilience (milestone-complete — 3/3 phases done)
-Phase: 9 (Unified check-drift + docs) — executed 2026-04-21; v1.2 ready for `/gsd:complete-milestone`
-Status: Phase 9 executed 2026-04-21. `bin/maintenance/check-drift.cjs` umbrella spawns file-layout + handoff-schema + namespace-drift (--dry) detectors via `spawnSync`, aggregates results, consolidated PASS/FAIL + exit 0/1/2. Offline-deterministic; `check-upstream-schema.cjs` deliberately excluded per CONTEXT D-06. Not in CI (per-detector jobs stay for fast-feedback granularity). README has new `## Session continuity + drift resilience` section between `## What GSD Plugin provides` and `## What changed from upstream GSD`. `CHANGELOG.md` created at repo root in Keep-a-Changelog format with v2.38.2/v2.38.3/v2.38.4 entries + `[Unreleased]` stub; plugin-vs-upstream version distinction in section headers. `.planning/PROJECT.md` post-sync checklist expanded from 7 to 9 steps (new CHANGELOG step 5, new check-drift step 8; old steps renumbered). DRIFT-03 + DRIFT-02 (namespace portion) + DOCS-01 + DOCS-02 + MAINT-01 closed. v1.2 milestone complete; all 8 requirements satisfied.
-Last activity: 2026-04-21 — Phase 9 executed (4 tasks, 4 commits, ~5 min)
+Milestone: v1.2 shipped (2026-04-24) — all 9 requirements satisfied, tagged, archived.
+Phase: none active. v1.2 phase artifacts moved to `.planning/milestones/v1.2-phases/`.
+Next action: `/gsd:new-milestone` to scope v1.3.
+Last activity: 2026-04-24 — v1.2 milestone archive + tag (v1.2 internal, v2.38.4 release)
 
 ```
-v1.2 Progress: [==========] 100% (3/3 phases — Phase 7 + 8 + 9 complete)
+v1.2 shipped: [==========] 100%
 v1.1 shipped: [==========] 100%
 v1.0 shipped: [==========] 100%
+v1.3: not yet scoped
 ```
 
 ## Performance Metrics
@@ -99,9 +100,16 @@ None.
 | 260420-vfb | Hook commands fall back to newest cached plugin version when baked `${CLAUDE_PLUGIN_ROOT}` is pruned | 2026-04-20 | 7a80d47 | [260420-vfb-hook-version-fallback](./quick/260420-vfb-hook-version-fallback/) |
 | 260420-cns | Rewrite `/gsd-<skill>` → `/gsd:<skill>` across plugin content (273 replacements, 100 files) | 2026-04-20 | 5dfbbd2 | [260420-cns-command-colon-fix](./quick/260420-cns-command-colon-fix/) |
 | 260421-u38 | Upgrade gsd-plugin to upstream GSD 1.38.3 (plugin v2.38.3) and publish GitHub release | 2026-04-21 | 1c75799 | [260421-u38-upgrade-gsd-plugin-to-version-1-38-3-mat](./quick/260421-u38-upgrade-gsd-plugin-to-version-1-38-3-mat/) |
+| 260421-rnu | Reorganize README — new-user flow (install/use/update) first; upstream-user migration content consolidated at end | 2026-04-21 | 5b5efd5 | [260421-rnu-readme-new-user-reorg](./quick/260421-rnu-readme-new-user-reorg/) |
+| 260424-srn | Rename `skills/gsd-<name>/` → `skills/<name>/` — fixes duplicated prefix in plugin command IDs (81 renames, 22 ref updates) | 2026-04-24 | b652f55 | [260424-srn-skill-dir-rename](./quick/260424-srn-skill-dir-rename/) |
+| 260425-mct | PostToolUse periodic checkpoint bridges Claude Code's microcompact gap (60s mtime throttle, source=auto-postool) | 2026-04-25 | 1c0ab2f | [260425-mct-postool-checkpoint](./quick/260425-mct-postool-checkpoint/) |
+| 260425-clr | Resurface `/clear` suggestions at end-of-flow boundaries (6 skills now emit Next Up continuation blocks; references/continuation-format.md was dormant) | 2026-04-25 | e0903f7 | [260425-clr-clear-suggestions](./quick/260425-clr-clear-suggestions/) |
+| 260425-wfd | Ship plugin-local `workflows/` dir (78 files) + rewrite all `@~/.claude/get-shit-done/*` refs to `@${CLAUDE_PLUGIN_ROOT}/*` form — closes Category B drift (genuinely-missing now 0; baseline 122/122/0) | 2026-04-25 | 8d3fbf9 | [260425-wfd-ship-workflows-dir](./quick/260425-wfd-ship-workflows-dir/) |
+| 260425-rgw | Broaden PostToolUse matcher to also include Read/Grep/Glob/WebFetch/WebSearch (closes 18-min research-read checkpoint gap from sftp-manager incident) | 2026-04-25 | 7497cc6 | [260425-rgw-postool-read-tools](./quick/260425-rgw-postool-read-tools/) |
+| 260421-rnu | Reorganize README — new-user flow (install/use/update) first; upstream-user migration content consolidated at end | 2026-04-21 | 5b5efd5 | [260421-rnu-readme-new-user-reorg](./quick/260421-rnu-readme-new-user-reorg/) |
 
 ## Session Continuity
 
-Last session: 2026-04-21T21:30:00Z (Phase 9 executed)
-Stopped at: Phase 9 complete — v1.2 Upstream Resilience fully shipped. Umbrella orchestrator at `bin/maintenance/check-drift.cjs` (127 lines, executable, spawns 3 detectors via spawnSync, offline-deterministic). README has new `## Session continuity + drift resilience` section. `CHANGELOG.md` scaffold at repo root (Keep-a-Changelog, v2.38.2/3/4 entries + Unreleased stub). `.planning/PROJECT.md` post-sync checklist is now 9 steps with check-drift.cjs as a must-exit-0 gate. Commits: 0170c3f (feat Task 1), 7fd66c8 (docs Task 2), 34a348c (docs Task 3), f9561e7 (docs Task 4). All 8 v1.2 requirements (DRIFT-01/02/03, SCHEMA-01/02/03, DOCS-01/02, MAINT-01) satisfied. Duration ~5 min.
-Next action: `/gsd:complete-milestone` to close v1.2 — bump plugin version to `2.38.4` in the three manifests, tag `v2.38.4`, snapshot ROADMAP + REQUIREMENTS to `.planning/milestones/v1.2-*`, and push the release.
+Last session: 2026-04-24 (v1.2 archived + tagged)
+Stopped at: v1.2 shipped. REQUIREMENTS.md deleted (archived to milestones/v1.2-REQUIREMENTS.md). Fresh REQUIREMENTS.md will be generated for v1.3 via `/gsd:new-milestone`.
+Next action: `/gsd:new-milestone` to scope v1.3 (questioning → research → requirements → roadmap).

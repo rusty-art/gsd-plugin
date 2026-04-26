@@ -8,15 +8,65 @@ History before 2.38.2 lives in git + the per-milestone archive (see `.planning/m
 
 ## [Unreleased]
 
-## [2.38.4] - 2026-04-21  (based on upstream GSD 1.38.3)
+## [2.38.7] - 2026-04-25  (based on upstream GSD 1.38.3)
 
-### Added
-- **Unified drift check orchestrator** — `bin/maintenance/check-drift.cjs` runs the file-layout, HANDOFF schema, and namespace drift detectors in sequence and reports a consolidated verdict. Intended for local dev loops and post-upstream-sync verification. Offline-deterministic (upstream-schema detector kept separate per Phase 9 CONTEXT D-06). Closes DRIFT-03 (Phase 9).
-- **README feature tour** for session continuity and drift resilience — new `## Session continuity + drift resilience` section between `## What GSD Plugin provides` and `## What changed from upstream GSD`. Two-paragraph prose describing the `/compact` round-trip (PreCompact hook → HANDOFF.json → SessionStart auto-resume → handoff cleanup) and the three-detector CI gate with ratchet baselines plus the post-sync upstream-schema detector. Closes DOCS-01 (Phase 9).
-- **`CHANGELOG.md`** — this file. Keep-a-Changelog format with plugin-vs-upstream version distinction in section headers. Closes DOCS-02 (Phase 9).
+Plugin-only patch — closes a real read-heavy-session checkpoint gap surfaced by a usage-cap incident, plus a fuller README comparison vs upstream.
+
+### Fixed
+- **PostToolUse periodic checkpoint now covers read-heavy research sessions.** Yesterday's matcher (`Bash|Edit|Write|MultiEdit|NotebookEdit`) only fired on file-mutating tool calls. A real research-phase session in another project hit a usage cap with the last checkpoint written 18 minutes earlier — those 18 minutes were almost entirely `Read`, `Grep`, `Glob`, `WebFetch` calls. None in the matcher → PostToolUse never fired → no checkpoint. Matcher broadened to `Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob|WebFetch|WebSearch`. Combined with the existing 60s mtime throttle, write rate stays bounded (≤1/min regardless of how often the hook fires). Smoke-tested under burst load (5 rapid reads → 1 write). Token cost: zero — verified in CC source that PostToolUse hook output is never injected into model context (quick task `260425-rgw`, commit `7497cc6`).
 
 ### Changed
-- **`.planning/PROJECT.md` post-sync checklist** — formalized nine-step sequence including a dedicated CHANGELOG update step, the unified `check-drift.cjs` gate ("must exit 0 before declaring sync complete"), and the separate `check-upstream-schema.cjs` step for upstream schema drift. Closes MAINT-01 (Phase 9).
+- **README "What changed from upstream GSD"** expanded from a single 6-row table to four grouped tables — Install + runtime architecture, Session continuity, Drift resilience, Plugin-environment robustness. Surfaces the v1.1, v1.2, and v2.38.x improvements that previously weren't documented as user-facing differences.
+
+## [2.38.6] - 2026-04-25  (based on upstream GSD 1.38.3)
+
+Plugin-only patch — closes the largest deferred drift category from v1.2 Phase 7.
+
+### Fixed
+- **Workflow `@`-includes now resolve.** Skills delegate to operational logic via `@`-include of workflow body files. Previously these used the legacy non-plugin install path (`@~/.claude/get-shit-done/workflows/<name>.md`), which doesn't exist for plugin users — visible to users as a "Falling back to legacy workflow file" graceful-degradation message and silently lost workflow content. v1.2's file-layout detector quantified the impact at 71 dangling refs (Category B) and explicitly deferred the fix as structural. This release ships the fix in two moves:
+  - **Plugin-local `workflows/` dir** — 78 workflow markdown files copied from upstream `get-shit-done/workflows/` into the plugin tree, namespace-rewritten to colon-form commands.
+  - **Path rewrite to `${CLAUDE_PLUGIN_ROOT}` form** — 270 `@`-include rewrites across 99 files: `@~/.claude/get-shit-done/<sub>` → `@${CLAUDE_PLUGIN_ROOT}/<sub>` for `workflows/`, `references/`, `templates/`, `contexts/`. Claude Code's plugin loader substitutes `${CLAUDE_PLUGIN_ROOT}` in skill/agent content (verified via `_research/claude-code-internals/utils/plugins/pluginOptionsStorage.ts`); at runtime the variable expands to the version-stamped install path so the include resolves to the real plugin file.
+
+  Net: **genuinely-missing dangling refs go from 71 → 0**. Skills now load their workflow bodies as intended (quick task `260425-wfd`).
+
+### Changed
+- **`bin/maintenance/check-file-layout.cjs`** detector extended with a third reference pattern for `@${CLAUDE_PLUGIN_ROOT}/<sub>` so the new plugin-local form is validated and future drift in it is caught.
+- **`tests/drift-baseline.json`** regenerated: was `109 / 38 / 71` (total / repairable / missing); now `122 / 122 / 0`. Total goes UP because the detector now catches the new resolvable refs; missing goes to ZERO.
+- **`.planning/PROJECT.md` "After each upstream GSD sync" checklist** step 1 now includes copying `get-shit-done/workflows/` into `workflows/` so future syncs keep workflow bodies in lockstep with upstream.
+- **`README.md` "What GSD Plugin provides"** lists the new `78 workflow bodies` entry.
+
+## [2.38.5] - 2026-04-25  (based on upstream GSD 1.38.3)
+
+Plugin-only patch — two follow-ups to v1.2's session-continuity work, plus an audit-doc fix.
+
+### Added
+- **PostToolUse periodic checkpoint** — bridges Claude Code's *microcompact* gap. CC has two compaction paths (verified in `_research/claude-code-internals/services/compact/`): full `compactConversation` (fires PreCompact → plugin checkpoints) and `microcompactMessages` (per-turn lossy GC of stale tool outputs; **does NOT fire PreCompact**, no event hookable). New `post-tool-use` handler in `bin/gsd-tools.cjs` writes a fresh `HANDOFF.json` after any file-mutating tool call (matcher: `Bash|Edit|Write|MultiEdit|NotebookEdit`), throttled by HANDOFF.json mtime to at most once per 60s. New `source: "auto-postool"` value in the schema enum. Net: `HANDOFF.json` is at most ~60s stale during an active session regardless of which compaction path ran (quick task `260425-mct`).
+- **`/clear` continuation hints surfaced at end-of-flow boundaries** — six terminal skills (`execute-phase`, `complete-milestone`, `verify-work`, `quick`, `plan-phase`, `ship`) now emit a `## ▶ Next Up` continuation block following `references/continuation-format.md` when the workflow concludes. Each block includes the standard `` `/clear` then [next-command] `` pattern plus a parenthetical explaining that `/clear` is safe (resume-work restores from HANDOFF.json since v1.1's session continuity work). Closes the dormant-template gap — `references/continuation-format.md` was rich but unused (quick task `260425-clr`).
+
+### Changed
+- **`bin/lib/checkpoint.cjs`** — `generateCheckpoint` accepts `auto-postool` as a third source value; status mapping treats both `auto-compact` and `auto-postool` as `auto-checkpoint`. Doc comment updated.
+- **`schema/handoff-v1.json`** — `source` enum extended from `["auto-compact", "manual-pause"]` to `["auto-compact", "manual-pause", "auto-postool"]` with a `$comment` describing each value.
+- **`hooks/hooks.json`** — PostToolUse matcher: `Bash` → `Bash|Edit|Write|MultiEdit|NotebookEdit`.
+- **`references/continuation-format.md`** — top-of-file safety footer documents that `/clear` is safe since v1.1's session-continuity work; gives the standard "/clear is safe" parenthetical wording as a single source of truth.
+
+### Fixed
+- **`.planning/AUDIT-v1.2.md` self-collision** — the v1.2 milestone audit's own "Plan self-collision" lesson contained a literal dash-form `/gsd-<real-skill-name>` example, tripping the namespace drift detector. Rephrased to a generic placeholder.
+
+## [2.38.4] - 2026-04-24  (based on upstream GSD 1.38.3)
+
+v1.2 Upstream Resilience shipment. Full context in [milestones/v1.2-ROADMAP.md](.planning/milestones/v1.2-ROADMAP.md).
+
+### Added
+- **Unified drift check orchestrator** — `bin/maintenance/check-drift.cjs` runs the file-layout, HANDOFF schema, and namespace drift detectors in sequence and reports a consolidated verdict. Intended for local dev loops and post-upstream-sync verification. Offline-deterministic (upstream-schema detector kept separate per v1.2 Phase 9 design). Closes DRIFT-03 (v1.2 Phase 9).
+- **README feature tour** for session continuity and drift resilience — new `## Session continuity + drift resilience` section. Two-paragraph prose describing the `/compact` round-trip (PreCompact hook → HANDOFF.json → SessionStart auto-resume → handoff cleanup) and the three-detector CI gate with ratchet baselines plus the post-sync upstream-schema detector. Closes DOCS-01 (v1.2 Phase 9).
+- **`CHANGELOG.md`** — this file. Keep-a-Changelog format with plugin-vs-upstream version distinction in section headers. Closes DOCS-02 (v1.2 Phase 9).
+
+### Changed
+- **`.planning/PROJECT.md` post-sync checklist** — formalized nine-step sequence including a dedicated CHANGELOG update step, the unified `check-drift.cjs` gate ("must exit 0 before declaring sync complete"), and the separate `check-upstream-schema.cjs` step for upstream schema drift. Closes MAINT-01 (v1.2 Phase 9).
+- **README reorganized for new-user-first flow** — install / quick start / updating / maintenance scripts now run contiguously at the top; upstream-user migration content consolidated into a trailing `## For users of upstream GSD` umbrella; versioning section demoted from top to meta. No content deletions (quick task 260421-rnu).
+
+### Fixed
+- **Skill command-ID duplication** — renamed all 81 skill directories from `skills/gsd-<name>/` → `skills/<name>/`. Previously Claude Code derived command IDs from the directory basename and prepended the plugin name (`gsd`), producing `/gsd:gsd-<name>` while the tab-completion menu displayed `/gsd:<name>` (from the frontmatter `name:` field). Dir rename unifies display and inserted forms. Also aligns plugin layout with upstream's `commands/gsd/<name>.md` structure — future syncs map 1:1 without a basename-rewriting step (quick task 260424-srn).
 
 ## [2.38.3] - 2026-04-21  (based on upstream GSD 1.38.3)
 
