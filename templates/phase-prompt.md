@@ -44,10 +44,10 @@ Omit only for trivial plans where task actions are sufficient.]
 </approach>
 
 <execution_context>
-@${CLAUDE_PLUGIN_ROOT}/workflows/execute-plan.md
-@${CLAUDE_PLUGIN_ROOT}/templates/summary.md
+@~/.claude/get-shit-done/workflows/execute-plan.md
+@~/.claude/get-shit-done/templates/summary.md
 [If plan contains checkpoint tasks (type="checkpoint:*"), add:]
-@${CLAUDE_PLUGIN_ROOT}/references/checkpoints.md
+@~/.claude/get-shit-done/references/checkpoints.md
 </execution_context>
 
 <context>
@@ -91,7 +91,7 @@ Omit only for trivial plans where task actions are sufficient.]
   <done>[Acceptance criteria]</done>
 </task>
 
-<!-- For checkpoint task examples and patterns, see @${CLAUDE_PLUGIN_ROOT}/references/checkpoints.md -->
+<!-- For checkpoint task examples and patterns, see @~/.claude/get-shit-done/references/checkpoints.md -->
 
 <task type="checkpoint:decision" gate="blocking">
   <decision>[What needs deciding]</decision>
@@ -388,9 +388,9 @@ Output: Working dashboard component.
 </objective>
 
 <execution_context>
-@${CLAUDE_PLUGIN_ROOT}/workflows/execute-plan.md
-@${CLAUDE_PLUGIN_ROOT}/templates/summary.md
-@${CLAUDE_PLUGIN_ROOT}/references/checkpoints.md
+@~/.claude/get-shit-done/workflows/execute-plan.md
+@~/.claude/get-shit-done/templates/summary.md
+@~/.claude/get-shit-done/references/checkpoints.md
 </execution_context>
 
 <context>

@@ -8,6 +8,57 @@ History before 2.38.2 lives in git + the per-milestone archive (see `.planning/m
 
 ## [Unreleased]
 
+### Added
+- **Rate-limit fallback hint** — new `Stop` hook tails the session transcript and, when it detects a rate-limit message ("You've hit your limit", "usage limit", "rate limit"), prints a bordered hint pointing at the no-token recovery path (`/exit` then `gsd-resume-at HH:MM` from a plain terminal). Best-effort detection because Claude Code renders its rate-limit message before any plugin code runs; the Stop event fires after, giving users a one-paste recovery the next time they look at the terminal. Same example also added to `skills/resume-at/SKILL.md` (No-token fallback callout) and `bin/gsd-resume-at` (head comment + runtime `--help`).
+
+## [2.39.1] - 2026-05-01  (based on upstream GSD 1.39.1)
+
+Upstream hotfix sync — picks up upstream GSD 1.39.1 (released 2026-05-01) on top of yesterday's v1.39.0 sync. Hotfix scope: `bin/gsd-tools.cjs` (1 line — adds `'skills'` to `GSD_MANAGED_DIRS` in `detect-custom-files`, PR #2942), `bin/lib/config-schema.cjs` + `bin/lib/config.cjs` (~20 lines — `SCHEMA_DEFAULTS` for `context_window`, PR #2944), `references/git-integration.md` (worktree hook policy, PR #2924), and roughly a dozen `workflows/*.md` files. Plugin-only patches in `bin/lib/core.cjs` (CLAUDE_PLUGIN_ROOT path resolution helpers — `resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset`) and `bin/gsd-tools.cjs` (`migrate` / `write-phase-memory` / `checkpoint` / `hook` command branches) preserved verbatim. Upstream did not modify `bin/lib/core.cjs` between 1.39.0 → 1.39.1, so the plugin's patched copy was kept as-is.
+
+### Added
+- **Upstream v1.39.1 hotfix bundle** — full tree-copy of changed files. Notable upstream additions surfaced via the sync:
+  - **`config-get` returns schema default for `context_window`** when the field is absent from the merged config (upstream #2944, via new `SCHEMA_DEFAULTS` table in `bin/lib/config-schema.cjs` + matching lookup in `bin/lib/config.cjs`).
+  - **`detect-custom-files` adds `skills/` to `GSD_MANAGED_DIRS`** so plugin-managed skill content is properly tracked (upstream #2942).
+  - **`--minimal` install profile across all runtimes + Claude local manifest fix** (upstream #2940).
+  - **`code-review --fix` dispatch** wired in the workflow body (upstream #2947).
+  - **`sketch --wrap-up` flag dispatch** (upstream #2949).
+  - **`spike --wrap-up` flag dispatch** (upstream #2948).
+  - **Deterministic Step 5 verification gate for `/gsd:reapply-patches`** (upstream #2969).
+  - **npm-style `gsd-sdk` shim on Windows under `--sdk install`** (upstream #2962).
+  - **`agent-skills` emits raw `<agent_skills>` block** instead of JSON-wrapped string (upstream #2917). Affects planner/executor input parsing — verified post-sync that plugin's `gsd-sdk query agent-skills <type>` consumers still parse correctly.
+  - **`claude+global` post-install instructs restart and skill fallback** (upstream #2957).
+  - **`help.md` aligned with post-#2824 skill consolidation** (upstream #2954).
+  - **Stale deleted-command refs cleaned up in workflow files** (upstream #2950).
+- See full upstream release notes: <https://github.com/gsd-build/get-shit-done/releases/tag/v1.39.1>.
+
+### Changed
+- **Version bump** — plugin `2.39.0 → 2.39.1` per `plugin_major = upstream_major + 1` versioning (README § Versioning). Patch bump mirrors upstream's hotfix increment.
+- **README counts** — unchanged (82 slash commands, 85 workflow bodies, 33 agent definitions). The hotfix modified existing files in tree-copy scope without adding/removing any.
+
+### Fixed
+- **Per-agent branch HEAD asserted before worktree commits** (upstream #2924) — prevents accidental commits to the wrong branch when worktrees drift. The accompanying `references/git-integration.md` change reverses the previous "use `--no-verify` in parallel agents" guidance: hooks now run normally on the introducing commit; opt-out is via the explicit `workflow.worktree_skip_hooks=true` config flag.
+
+## [2.39.0] - 2026-05-01  (based on upstream GSD 1.39.0)
+
+Upstream sync release — picks up upstream GSD 1.39.0 source-tree changes (workflows, references, templates, contexts, bin/lib utilities, bin/gsd-tools.cjs) while preserving plugin-only patches in `bin/lib/core.cjs` (CLAUDE_PLUGIN_ROOT path resolution helpers — `resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset`) and `bin/gsd-tools.cjs` (`migrate` command, `hook` handlers for session-start / pre-compact / post-tool-use, `checkpoint` command, `write-phase-memory` command, plugin-root-aware paths).
+
+### Added
+- **Upstream v1.39.0 source-tree changes** — full tree-copy of `workflows/` (78 → 85 top-level workflow bodies), `references/`, `templates/`, `contexts/`, `bin/lib/*.cjs`, and `bin/gsd-tools.cjs`. Notable upstream additions surfaced via the sync:
+  - **`--minimal` install profile** — ~94% cold-start token reduction for local LLMs (32K–128K context), writes only main-loop core skills (upstream #2762).
+  - **`/gsd:edit-phase`** — modify any roadmap phase field in place without renumbering (upstream #2617).
+  - **Post-merge build & test gate** — execute-phase auto-detects build/test commands across Xcode, Make, Just, Cargo, Go, Python, npm; iOS projects run `xcodebuild` automatically (upstream #2720).
+  - **Per-runtime review models** — `review.models.<cli>` config + extended `RUNTIME_PROFILE_MAP` covering `gemini`, `qwen`, `opencode`, `copilot` (upstream #2612, #2748).
+  - **Workstream config inheritance** — root `.planning/config.json` deep-merged into each workstream config; explicit `null` overrides parent (upstream #2714).
+  - **Skill-surface consolidation** — upstream collapsed 86 → 59 skill entries via four new grouped skills (`capture`, `phase`, `config`, `workspace`) and six parents absorbing sub-operations as flags. The plugin still ships 82 `skills/<name>/SKILL.md` files because `skills/` is not in the tree-copy scope (the plugin owns the slash-command surface; upstream's `commands/gsd/*` consolidation is informational here).
+- See full upstream release notes: <https://github.com/gsd-build/get-shit-done/releases/tag/v1.39.0>.
+
+### Changed
+- **Version bump** — plugin `2.38.8 → 2.39.0` per `plugin_major = upstream_major + 1` versioning (README § Versioning).
+- **README counts** — workflow bodies `78 → 85`, agent definitions `21 → 33` (post-sync `agents/` count corrected). Slash commands stays at 82 (`skills/` not in tree-copy scope).
+
+### Fixed
+- **`MODEL_ALIAS_MAP.opus` no longer needs a plugin patch** — upstream caught up (`MODEL_ALIAS_MAP` and `RUNTIME_PROFILE_MAP.claude.opus` updated to `claude-opus-4-7` in upstream #2733). Our patch was previously the only way the plugin pinned the right model ID; now it's parity with upstream and the patch is structurally identical.
+
 ## [2.38.8] - 2026-04-27  (based on upstream GSD 1.38.3)
 
 Plugin-only feature release — adds scheduled-resume support and surfaces plugin-only features more prominently in the README.
