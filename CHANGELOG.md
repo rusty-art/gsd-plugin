@@ -8,6 +8,109 @@ History before 2.38.2 lives in git + the per-milestone archive (see `.planning/m
 
 ## [Unreleased]
 
+## [2.42.1] - 2026-05-07
+
+Hotfix that completes v2.42.0's "no external prereq" promise. v2.42.0 shipped `sdk/dist/cli.js` (~3 KB tsc shim) without the ~81 MB of runtime npm dependencies it imports (`ws`, `@anthropic-ai/claude-agent-sdk`, transitives). On a truly fresh box (no prior `npx get-shit-done-cc`) the bundled `gsd-sdk` failed at module-resolution time. **Caught by smoke-testing v2.42.0 on a fresh Debian 13 box** (`192.168.1.170`) — the user's existing macOS/laptop installs had an external `gsd-sdk` already on `PATH` so the bug was invisible there.
+
+### Fixed
+- **`sdk/dist/cli.js`** — switched the SDK build from plain `tsc` to `tsc && esbuild --bundle --platform=node --format=esm --outfile=dist/cli.js --allow-overwrite`, with a `createRequire` shim banner so CJS deps (ws's transitive `require()` calls) work inside the ESM output. Result: `dist/cli.js` is now a single 1.5 MB self-contained file with all runtime deps inlined. No `node_modules` needed at plugin runtime. Verified against 6 test scenarios on fresh Debian 13 with no prior GSD install: `--version`, PATH-based resolution, `query state.load`, `query commands`, MCP regression test, and workflow-style callsite simulation. All pass.
+- **`sdk/package.json`** — added `bundle` script and updated `build` to chain it after `tsc`. Added `esbuild ^0.28.0` as devDependency (build-time only, not shipped).
+
+### Notes
+- Plugin tree size grew by ~+1.5 MB (the bundled `cli.js`). Total cost is still ~80 MB less than committing `node_modules/` would have been.
+- v2.42.0 is being **superseded immediately** rather than left in the wild. Anyone who already pulled v2.42.0 should run `/plugin marketplace update gsd-plugin` to surface this fix.
+
+## [2.42.0] - 2026-05-07
+
+**No more `gsd-sdk` prerequisite.** The plugin now bundles the GSD SDK inside its own tree, so `/plugin install gsd@gsd-plugin` is genuinely the only install step. Closes [#4](https://github.com/jnuyens/gsd-plugin/issues/4) at the architectural level (v2.41.1's README fix corrected the documentation; this release removes the requirement that documentation was trying to describe).
+
+### Added
+- **`sdk/`** — full GSD SDK source tree synced from upstream `gsd-build/get-shit-done@v1.41.0` (`src/`, `prompts/`, `scripts/`, `package.json`, `tsconfig.json`, `package-lock.json`).
+- **`sdk/dist/`** — pre-built TypeScript output (`tsc` against the committed `src/`). Plugin commits `dist/` even though upstream gitignores it: plugin users won't run `npm install` / `npm run build`, so the binary needs to be ready immediately after `/plugin install`.
+- **`bin/gsd-sdk`** — POSIX shell wrapper that `exec`s `node ${CLAUDE_PLUGIN_ROOT}/sdk/dist/cli.js`. Falls back to script-relative resolution if `CLAUDE_PLUGIN_ROOT` is unset, and to an external `gsd-sdk` on `PATH` if the bundled one is somehow missing (preserves legacy install path as a safety net).
+- **`bin/gsd-sdk.cmd`** — Windows batch wrapper with the same logic.
+
+### Changed
+- **README** — replaced the "Prerequisites: install the GSD SDK CLI" subsection (added in v2.41.1 as a stop-gap) with a "No prerequisites" notice. Migration §2 now correctly tells users it's safe to `npm uninstall -g get-shit-done-cc` after upgrading to v2.42.0+.
+- **Versioning rule exception** — bumping minor (`2.41.x → 2.42.0`) for a plugin-only feature even though upstream is still at `1.41.0`. Standard rule (`plugin_minor = upstream_minor`) resumes when the next upstream sync lands; if upstream then ships `1.42.0`, that sync goes out as `2.43.0` to avoid collision.
+
+### Plugin patches
+Two SDK source patches were needed for the plugin's flat directory layout:
+- **`sdk/src/query/state-project-load.ts`** — adds `${CLAUDE_PLUGIN_ROOT}/bin/lib/core.cjs` as the first probe candidate. Upstream's resolver expects `<root>/get-shit-done/bin/lib/core.cjs`; the plugin's flat layout is `<plugin_root>/bin/lib/core.cjs`. Tagged `[PLUGIN PATCH]` inline.
+- **`sdk/src/query-gsd-tools-path.ts`** — same patch for `gsd-tools.cjs`. Tagged `[PLUGIN PATCH]` inline.
+
+### How resolution works (no callsite rewrite was needed)
+Claude Code automatically prepends each plugin's `bin/` directory to `PATH` for every `Bash` tool call. Existing `gsd-sdk query ...` invocations across all 500+ workflow and skill callsites resolve to the bundled wrapper for plugin-only users, with **zero rewrite** required. Users with an external `gsd-sdk` already on `PATH` (e.g. `/opt/homebrew/bin` from a prior `npx get-shit-done-cc` install) keep using their external one because plugin `bin/` is appended (not prepended) by Claude Code — no behavior change for legacy users.
+
+### Verified
+- `gsd-sdk --version` → `v1.50.0-canary.0` (bundled, was the npm-published `0.1.0`)
+- `gsd-sdk query state.load` returns valid project config block
+- `gsd-sdk query roadmap.analyze` returns project milestones
+- `gsd-sdk query commands` returns full command list
+- `node tests/mcp-stdio-framing.test.cjs` still passes (regression fence from v2.40.2 unaffected)
+
+### Notes
+- Bundle adds ~6.8 MB to the plugin tree (`sdk/dist/` 3.9 MB + `sdk/src/` 2.8 MB + prompts/scripts). Plugin total still well under typical Claude Code plugin sizes.
+- Long-term: route workflow scripts through the plugin's own MCP server instead of shelling out at all. Tracked separately; this release is the architectural prerequisite that makes the routing achievable.
+
+## [2.41.1] - 2026-05-07
+
+Documentation hotfix — corrects a README instruction that left migrating users (and any new user without a prior `npx get-shit-done-cc` install) with broken `/gsd:*` commands.
+
+### Fixed
+- **`README.md` — Manual migration §2** ([#4](https://github.com/jnuyens/gsd-plugin/issues/4)) — earlier versions told users to `npm uninstall -g get-shit-done-cc`, which removes the `gsd-sdk` binary that the plugin's workflow scripts shell out to in 500+ places. After following the step, every `/gsd:*` command failed with `command not found: gsd-sdk`. §2 now explicitly tells users to keep the package installed (with a "this README used to be wrong" callout) and points at the long-term plan to route workflows through the plugin's MCP server.
+- **`README.md` — Installation prerequisites** — added a new "Prerequisites: install the GSD SDK CLI" subsection before Step 1, with the exact `npm install -g get-shit-done-cc` command and a verification snippet (`which gsd-sdk` / `gsd-sdk --version`). This closes the same gap for fresh installs that issue #4 surfaced for migrating ones.
+
+### Notes
+- Reported by @ThomasHezard ([#4](https://github.com/jnuyens/gsd-plugin/issues/4), 2026-04-28) with a Claude-on-behalf-of-user investigation that pinpointed exact line numbers and counted the `gsd-sdk` ref footprint. Confirmed independently by @herman925 (2026-05-06).
+- This is a documentation-only release; no behavior change in plugin code. The architectural fix (routing workflow scripts through the plugin's MCP server so `gsd-sdk` is no longer a separate prerequisite) remains tracked at [#4](https://github.com/jnuyens/gsd-plugin/issues/4).
+
+## [2.41.0] - 2026-05-07  (based on upstream GSD 1.41.0)
+
+Upstream minor sync — picks up GSD 1.41.0 (released 2026-05-07). Plugin-only patches in `bin/lib/core.cjs` (CLAUDE_PLUGIN_ROOT path resolution helpers `resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset` + agent-dir override `getAgentsDir` reading `GSD_AGENTS_DIR`) preserved via 3-way merge. `bin/gsd-tools.cjs` untouched upstream this cycle; plugin's `migrate` / `write-phase-memory` / `checkpoint` / `hook` cases verified intact via regression grep.
+
+### Added
+- **`/gsd:mvp-phase` workflow** — new MVP-phase command (vertical-slice planning + TDD execution + UAT verification). Includes 8 new references (`mvp-concepts`, `planner-mvp-mode`, `execute-mvp-tdd`, `verify-mvp-mode`, `spidr-splitting`, `skeleton-template`, `user-story-template`, `worktree-path-safety`). New plugin skill `skills/mvp-phase/SKILL.md` exposes the command.
+- **3 new workflow bodies** for existing skills: `workflows/add-backlog.md`, `workflows/debug.md`, `workflows/thread.md` (the skills already existed in the plugin; upstream now ships the workflow files they reference).
+- **`bin/lib/runtime-homes.cjs`** — runtime-aware `globalSkillsBase` resolution (replaces hardcoded path, upstream #3126).
+- 7 agent-prompt updates: `gsd-codebase-mapper`, `gsd-debug-session-manager`, `gsd-executor`, `gsd-plan-checker`, `gsd-planner`, `gsd-roadmapper`, `gsd-verifier`.
+- See full upstream release notes: <https://github.com/gsd-build/get-shit-done/releases/tag/v1.41.0>.
+
+### Changed
+- **Version bump** — plugin `2.40.2 → 2.41.0` per `plugin_minor = upstream_minor` versioning (README § Versioning).
+- **`workflows/extract_learnings.md` renamed to `workflows/extract-learnings.md`** (snake → kebab; git history preserved via `git mv`).
+- **33 workflows refreshed** at top level: `ai-integration-phase`, `audit-fix`, `audit-milestone`, `code-review-fix`, `code-review`, `diagnose-issues`, `discuss-phase-assumptions`, `discuss-phase`, `docs-update`, `execute-phase`, `execute-plan`, `explore`, `help`, `import`, `ingest-docs`, `manager`, `map-codebase`, `new-milestone`, `new-project`, `next`, `plan-phase`, `progress`, `quick`, `resume-project`, `scan`, `secure-phase`, `settings`, `stats`, `ui-phase`, `ui-review`, `update`, `validate-phase`, `verify-work`. Notable: `quick.md` (history-based resurrection guard), `plan-phase.md` (removed stale OpenCode `agent:` directive #3156), `execute-phase.md` + sub-step files (cwd-drift sentinel + absolute-path guard #3097/#3099).
+- **3 nested workflow files refreshed**: `discuss-phase/modes/advisor.md`, `execute-phase/steps/codebase-drift-gate.md`, `execute-phase/steps/per-plan-worktree-gate.md`.
+- **12 `bin/lib/` modules refreshed** wholesale (no plugin patches in any of them): `artifacts`, `config-schema`, `graphify`, `init`, `milestone`, `phase-command-router`, `phase`, `profile-output`, `roadmap`, `state-command-router`, `state`, `verify`.
+- **`templates/README.md`** updated.
+
+### Fixed
+- Upstream bug fixes flowing through automatically: milestone version-resolution (#3109), STATE narrative-tail normalization (#3122), `roadmap.cjs` plan-count for nested layout (#3128), `state.begin-phase` idempotency (#3127), workflow contract validation (#3151), and statusline numeric-100 / next_phases parsing (#3154).
+
+## [2.40.2] - 2026-05-07
+
+Hotfix — restores the bundled MCP server's stdio transport so `claude mcp list` reports `gsd: ✓ Connected` and the eight `gsd_*` MCP tools become reachable.
+
+### Fixed
+- **`mcp/server.cjs`** (#3) — switched the stdio transport to newline-delimited JSON, which is what the MCP spec and current Claude Code MCP clients send and expect. The previous LSP-style `Content-Length:` framing silently dropped every request: the reader required `\r\n\r\n` that ndjson never produces, and the writer emitted headers ndjson clients won't parse as a response boundary. Reader now tries ndjson first and falls back to Content-Length framing only when a complete LSP header block arrives before the next newline (safe for any legacy transport still emitting it). Verified locally: `initialize` returns 176 bytes, `tools/list` returns all 8 tools.
+
+### Notes
+- Reported and patched by @Sovereigntymind (the project's first external contributor!) and confirmed on macOS / 2.40.1 by @jesse-smith. The fix is the contributor's tested patch applied verbatim, with the LSP path kept as a fallback rather than removed.
+- Slash commands were unaffected by this bug because they read `.planning/` files directly and don't go through the MCP server.
+
+## [2.40.1] - 2026-05-06
+
+Hotfix — suppresses a false-positive "GSD subagents are not installed" warning that appeared after `/gsd:new-project` and `/gsd:new-milestone` for plugin users.
+
+### Fixed
+- **`bin/lib/core.cjs::getAgentsDir()`** (#PLUGIN-AGENTS-DIR) — upstream's `__dirname/../../../agents` traversal assumes the upstream `<root>/get-shit-done/bin/lib/` layout and lands one level too high in the plugin's flattened `<plugin_root>/bin/lib/` layout. Patched to prefer `path.join(resolveGsdRoot(), 'agents')` when that directory exists, so `checkAgentsInstalled()` finds the bundled agents.
+- **`workflows/new-project.md` + `workflows/new-milestone.md`** — the `agents_installed: false` warning gate now first overrides the flag for plugin users (`CLAUDE_PLUGIN_ROOT` set + bundled `agents/gsd-planner.md` present), and the fallback warning text clarifies that plugin users can ignore it. The previous warning recommended `npx get-shit-done-cc@latest --global`, which the plugin's `migrations/legacy-cleanup.cjs::autoMigrate` actively undoes — bad advice for plugin users.
+- **`workflows/quick.md`** — exports `GSD_AGENTS_DIR=$CLAUDE_PLUGIN_ROOT/agents` before the `gsd-sdk query init.quick` call so the SDK's bundled (un-patched) `core.cjs` consults the plugin's agents directory.
+
+### Notes
+- Patches are tagged inline with `[PLUGIN PATCH]` / `#PLUGIN-AGENTS-DIR` markers and recorded in the persistent plugin-patches inventory so future upstream syncs preserve them.
+- This is a plugin-side fix only. Standalone `gsd-sdk` invocations outside the plugin's workflows still report the false-negative, because the SDK ships its own bundled `core.cjs` from the npx cache and that copy is not patched. A future upstream PR can land the same `getAgentsDir()` fix at source.
+
 ## [2.40.0] - 2026-05-03  (based on upstream GSD 1.40.0)
 
 Upstream minor sync — picks up upstream GSD 1.40.0 (released 2026-05-02). Plugin-only patches in `bin/lib/core.cjs` (CLAUDE_PLUGIN_ROOT path resolution helpers — `resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset`) and `bin/gsd-tools.cjs` (`migrate` / `write-phase-memory` / `checkpoint` / `hook` command branches) preserved via 3-way merge.
