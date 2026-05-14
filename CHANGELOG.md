@@ -8,6 +8,18 @@ History before 2.38.2 lives in git + the per-milestone archive (see `.planning/m
 
 ## [Unreleased]
 
+## [2.42.7] - 2026-05-14  (based on upstream GSD 1.41.2)
+
+Disable the `gsd-context-monitor.js` PostToolUse hook by removing its `hooks.json` registration. The script file stays in `hooks/` for upstream-merge friendliness; only the registration block is removed.
+
+Rationale: in this fork's deployment, context-usage banners are produced by an external statusline bridge + autocompact override (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). The plugin's own 35%/25% warnings are redundant and inject duplicate WARNING/CRITICAL `additionalContext` into the agent transcript.
+
+### Changed
+- **`hooks/hooks.json`** — remove the `PostToolUse` block (matcher `Bash|Edit|Write|MultiEdit|Agent|Task`) that registered `gsd-context-monitor.js`. The 5 dispatcher entries and the other 7 individual hook scripts from 2.42.6 are preserved unchanged.
+
+### Notes
+- For users who *want* the warnings, restore by re-adding the block, or (still on 2.42.6 behaviour) keep the registration and disable per-project via `.planning/config.json` `{"hooks":{"context_warnings":false}}` on projects where it's noisy.
+
 ## [2.42.6] - 2026-05-13  (based on upstream GSD 1.41.2)
 
 Pull 8 upstream hook scripts (security and correctness defense-in-depth) into the plugin's `hooks/` tree. First ship is soft-warn: all guards either no-op silently or emit advisory `additionalContext` without blocking the tool call. The conventional-commits validator is the lone exception (blocks on bad commit messages) and is opt-in via `.planning/config.json` `{"hooks":{"community":true}}`. The plugin's existing 5 dispatcher entries (SessionStart auto-resume, PreToolUse Edit|Write, PostToolUse periodic checkpoint, PreCompact, Stop rate-limit nudge) are preserved unchanged: hybrid hook architecture per design.
