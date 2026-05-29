@@ -4,7 +4,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { escapeRegex, loadConfig, normalizePhaseName, comparePhaseNum, findPhaseInternal, getArchivedPhaseDirs, generateSlugInternal, getMilestonePhaseFilter, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, toPosixPath, output, error, readSubdirectories, phaseTokenMatches, atomicWriteFileSync } = require('./core.cjs');
+const { escapeRegex, loadConfig, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, findPhaseInternal, getArchivedPhaseDirs, generateSlugInternal, getMilestonePhaseFilter, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, toPosixPath, output, error, readSubdirectories, phaseTokenMatches, ERROR_REASON } = require('./core.cjs');
+const { platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningDir, withPlanningLock } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
 const { writeStateMd, readModifyWriteStateMd, stateExtractField, stateReplaceField, stateReplaceFieldWithFallback, updatePerformanceMetricsSection } = require('./state.cjs');
@@ -169,8 +170,10 @@ function cmdPhaseNextDecimal(cwd, basePhase, raw) {
     if (fs.existsSync(roadmapPath)) {
       try {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+        // #3537: padding-tolerant on both sides — `0*${escapeRegex(...)}`
+        // tolerated extra padding but not missing.
         const phasePattern = new RegExp(
-          `#{2,4}\\s*Phase\\s+0*${escapeRegex(normalized)}\\.(\\d+)\\s*:`, 'gi'
+          `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalized)}\\.(\\d+)\\s*:`, 'gi'
         );
         let pm;
         while ((pm = phasePattern.exec(roadmapContent)) !== null) {
@@ -205,6 +208,65 @@ function cmdPhaseNextDecimal(cwd, basePhase, raw) {
   } catch (e) {
     error('Failed to calculate next decimal phase: ' + e.message);
   }
+}
+
+function getRoadmapModeForPhase(cwd, phaseNum) {
+  const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+  if (!fs.existsSync(roadmapPath)) return null;
+
+  const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+  const milestoneContent = extractCurrentMilestone(rawContent, cwd);
+  const fullContent = stripShippedMilestones(rawContent);
+  const escapedPhase = phaseMarkdownRegexSource(phaseNum);
+  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}\\s*:`, 'i');
+
+  for (const content of [milestoneContent, fullContent]) {
+    const headerMatch = content.match(phaseHeader);
+    if (!headerMatch || headerMatch.index === undefined) continue;
+
+    const sectionStart = headerMatch.index;
+    const rest = content.slice(sectionStart);
+    const nextHeader = rest.slice(headerMatch[0].length).match(/\n#{2,4}\s+Phase\s+\S/i);
+    const sectionEnd = nextHeader ? sectionStart + headerMatch[0].length + nextHeader.index : content.length;
+    const section = content.slice(sectionStart, sectionEnd);
+    const modeMatch = section.match(/\*\*Mode(?::\*\*|\*\*:)\s*([^\n]+)/i);
+    if (modeMatch) return modeMatch[1].trim().toLowerCase();
+  }
+
+  return null;
+}
+
+function cmdPhaseMvpMode(cwd, args, raw) {
+  const phaseNum = args[0];
+  if (!phaseNum) {
+    error('Usage: phase.mvp-mode <phase-number> [--cli-flag]', ERROR_REASON.USAGE);
+  }
+
+  const cliFlagPresent = args.includes('--cli-flag');
+  const roadmapMode = getRoadmapModeForPhase(cwd, phaseNum);
+  const config = loadConfig(cwd);
+  const configMvpMode = Boolean(config.mvp_mode);
+
+  let active = false;
+  let source = 'none';
+  if (cliFlagPresent) {
+    active = true;
+    source = 'cli_flag';
+  } else if (roadmapMode === 'mvp') {
+    active = true;
+    source = 'roadmap';
+  } else if (configMvpMode) {
+    active = true;
+    source = 'config';
+  }
+
+  output({
+    active,
+    source,
+    roadmap_mode: roadmapMode,
+    config_mvp_mode: configMvpMode,
+    cli_flag_present: cliFlagPresent,
+  }, raw);
 }
 
 function cmdFindPhase(cwd, phase, raw) {
@@ -383,10 +445,18 @@ function cmdPhasePlanIndex(cwd, phase, raw) {
 
   // Build a map from plan ID → raw plan for fast lookup.
   // Deps that reference plans outside this phase are treated as external and ignored.
-  const planMap = new Map(rawPlans.map(p => [p.id, p]));
+  // [PLUGIN PATCH #PLUGIN-DEPS-ON-CASE-INSENSITIVE] Plan ID lookups are case-insensitive:
+  // map keys are lowercased and dep lookups are lowercased at query time so that
+  // depends_on: ['05c-01'] resolves to a plan with ID '05C-01-foo'.
+  const planMap = new Map(rawPlans.map(p => [p.id.toLowerCase(), p]));
   // Secondary index: canonical prefix → full plan ID, so depends_on: ['03-01'] resolves
   // to '03-01-auth-hardening-PLAN.md'-derived ID '03-01-auth-hardening' (k015).
-  const canonicalToId = new Map(rawPlans.map(p => [extractCanonicalPlanId(p.id), p.id]));
+  const canonicalToId = new Map(rawPlans.map(p => [extractCanonicalPlanId(p.id).toLowerCase(), p.id]));
+  // NB: this CJS path intentionally supports a subset of the SDK's lookup forms
+  // (full plan ID + canonical prefix only, no short-form). The SDK's phase.ts also
+  // has a `shortFormToId` map for two-digit references like depends_on: ['01']; that
+  // form is not supported here. Parity gap predates the case-insensitive patch and
+  // is tracked separately. Adding short-form here would require collision detection.
 
   // Kahn's algorithm — compute in-degree and adjacency for in-phase deps only.
   const level = new Map();
@@ -398,7 +468,9 @@ function cmdPhasePlanIndex(cwd, phase, raw) {
     if (!adj.has(p.id)) adj.set(p.id, []);
     for (const dep of p.dependsOn) {
       // Accept both full-stem ('03-01-auth-hardening') and canonical-prefix ('03-01') forms.
-      const resolvedDep = planMap.has(dep) ? dep : canonicalToId.get(dep);
+      // [PLUGIN PATCH #PLUGIN-DEPS-ON-CASE-INSENSITIVE] Lookups are case-insensitive.
+      const depKey = dep.toLowerCase();
+      const resolvedDep = planMap.has(depKey) ? planMap.get(depKey).id : canonicalToId.get(depKey);
       if (!resolvedDep) continue; // external dep — ignore
       if (!adj.has(resolvedDep)) adj.set(resolvedDep, []);
       adj.get(resolvedDep).push(p.id);
@@ -571,8 +643,8 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     // Create directory with .gitkeep so git tracks empty folders
-    fs.mkdirSync(dirPath, { recursive: true });
-    fs.writeFileSync(path.join(dirPath, '.gitkeep'), '');
+    platformEnsureDir(dirPath);
+    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     // Build phase entry
     const dependsOn = config.phase_naming === 'custom' ? '' : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
@@ -587,7 +659,7 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
       updatedContent = rawContent + phaseEntry;
     }
 
-    atomicWriteFileSync(roadmapPath, updatedContent);
+    platformWriteSync(roadmapPath, updatedContent);
     return { newPhaseId: _newPhaseId, dirName: _dirName };
   });
 
@@ -650,8 +722,8 @@ function cmdPhaseAddBatch(cwd, descriptions, raw) {
         dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
       }
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
-      fs.mkdirSync(dirPath, { recursive: true });
-      fs.writeFileSync(path.join(dirPath, '.gitkeep'), '');
+      platformEnsureDir(dirPath);
+      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
       const dependsOn = config.phase_naming === 'custom' ? '' : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
       const phaseEntry = `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run /gsd:plan-phase ${newPhaseId} to break down)\n`;
       const lastSeparator = rawContent.lastIndexOf('\n---');
@@ -667,7 +739,7 @@ function cmdPhaseAddBatch(cwd, descriptions, raw) {
         naming_mode: config.phase_naming,
       });
     }
-    atomicWriteFileSync(roadmapPath, rawContent);
+    platformWriteSync(roadmapPath, rawContent);
     return added;
   });
   output({ phases: results, count: results.length }, raw);
@@ -690,13 +762,14 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    // Normalize input then strip leading zeros for flexible matching
+    // Normalize input then route through canonical padding-tolerant fragment
+    // (#3537). The prior hand-rolled `0*${unpadded}` worked for the integer
+    // base but duplicated logic — funnel it through the shared helper.
     const normalizedAfter = normalizePhaseName(afterPhase);
-    const unpadded = normalizedAfter.replace(/^0+/, '');
-    const afterPhaseEscaped = unpadded.replace(/\./g, '\\.');
-    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+0*${afterPhaseEscaped}:`, 'i');
+    const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
+    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:`, 'i');
     if (!targetPattern.test(content)) {
-      const checklistPattern = new RegExp(`-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+0*${afterPhaseEscaped}:`, 'i');
+      const checklistPattern = new RegExp(`-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}:`, 'i');
       if (checklistPattern.test(content)) {
         error(`Phase ${afterPhase} exists in roadmap summary but is missing a detail section (### Phase ${afterPhase}: ...).`);
       }
@@ -718,9 +791,11 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
       }
     } catch { /* intentionally empty */ }
 
-    // Also scan ROADMAP.md content (already loaded) for decimal entries
+    // Also scan ROADMAP.md content (already loaded) for decimal entries.
+    // #3537: padding-tolerant fragment so un-padded `Phase 2.7:` is found
+    // when caller passes the padded base `02`.
     const rmPhasePattern = new RegExp(
-      `#{2,4}\\s*Phase\\s+0*${escapeRegex(normalizedBase)}\\.(\\d+)\\s*:`, 'gi'
+      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)\\s*:`, 'gi'
     );
     let rmMatch;
     while ((rmMatch = rmPhasePattern.exec(rawContent)) !== null) {
@@ -737,14 +812,14 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     // Create directory with .gitkeep so git tracks empty folders
-    fs.mkdirSync(dirPath, { recursive: true });
-    fs.writeFileSync(path.join(dirPath, '.gitkeep'), '');
+    platformEnsureDir(dirPath);
+    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     // Build phase entry
     const phaseEntry = `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run /gsd:plan-phase ${_decimalPhase} to break down)\n`;
 
     // Insert after the target phase section
-    const headerPattern = new RegExp(`(#{2,4}\\s*Phase\\s+0*${afterPhaseEscaped}:[^\\n]*\\n)`, 'i');
+    const headerPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:[^\\n]*\\n)`, 'i');
     const headerMatch = rawContent.match(headerPattern);
     if (!headerMatch) {
       error(`Could not find Phase ${afterPhase} header`);
@@ -762,7 +837,7 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     }
 
     const updatedContent = rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx);
-    atomicWriteFileSync(roadmapPath, updatedContent);
+    platformWriteSync(roadmapPath, updatedContent);
     return { decimalPhase: _decimalPhase, dirName: _dirName };
   });
 
@@ -880,7 +955,24 @@ function updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, rem
     let content = fs.readFileSync(roadmapPath, 'utf-8');
     const escaped = escapeRegex(targetPhase);
 
-    content = content.replace(new RegExp(`\\n?#{2,4}\\s*Phase\\s+${escaped}\\s*:[\\s\\S]*?(?=\\n#{2,4}\\s+Phase\\s+\\d+\\s*:|$)`, 'i'), '');
+    // #3601: the end-of-section lookahead is depth-aware. It captures the
+    // hash count of the header being removed and stops only at a subsequent
+    // header of the SAME depth, whether integer or decimal. This preserves
+    // two existing contracts:
+    //
+    //   (#3601 case) Remove `### Phase 2:` and stop at `### Phase 2.1:` —
+    //   `Phase 2.1` is a peer-level decimal phase (depth 3) and must be
+    //   preserved.
+    //
+    //   (#3355 case) Remove `### Phase 27:` and continue past
+    //   `#### Phase 27.1:` (depth 4 — a child of Phase 27) until the next
+    //   depth-3 header. The child decimal is part of the integer phase
+    //   being removed.
+    //
+    // The `(?!#)` negative lookahead after the backreference prevents the
+    // depth-3 match from being satisfied by a depth-4+ header that starts
+    // with the same three hashes.
+    content = content.replace(new RegExp(`\\n?(?<h>#{2,4})\\s*Phase\\s+${escaped}\\s*:[\\s\\S]*?(?=\\n\\k<h>(?!#)\\s+Phase\\s+[^\\n:]+\\s*:|$)`, 'i'), '');
     content = content.replace(new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}[:\\s][^\\n]*`, 'gi'), '');
     content = content.replace(new RegExp(`\\n?\\|\\s*${escaped}\\.?\\s[^|]*\\|[^\\n]*`, 'gi'), '');
 
@@ -897,8 +989,17 @@ function updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, rem
         /(\|\s*)(\d+)(\.\s)/g,
         (_match, prefix, num, suffix) => `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`
       );
+      // #3602: extend the suffix lookahead so slugged plan filenames like
+      // `07-01-cherry-pick-foundation-PLAN.md` match too. The previous
+      // pattern only allowed a compact `-(PLAN|SUMMARY).md` immediately
+      // after the plan number (or no suffix at all); a slug between the
+      // number and the `-PLAN.md` / `-SUMMARY.md` suffix made the
+      // lookahead fail and left the stale `07-01-` prefix in ROADMAP
+      // text while the on-disk file was already renamed to `06-01-…`.
+      // The slug segment `(?:-[A-Za-z][A-Za-z0-9-]*)*` allows any number
+      // of kebab-case tokens before the canonical PLAN/SUMMARY suffix.
       content = content.replace(
-        /(?<![0-9-])(\d{2})-(\d{2})(?=(?:-(?:PLAN|SUMMARY)\.md)?(?![0-9-]))/g,
+        /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)*-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum, planNum) => `${decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`
       );
       content = content.replace(
@@ -911,7 +1012,7 @@ function updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, rem
       );
     }
 
-    atomicWriteFileSync(roadmapPath, content);
+    platformWriteSync(roadmapPath, content);
   });
 }
 
@@ -1029,14 +1130,16 @@ function cmdPhaseComplete(cwd, phaseNum, raw) {
       let roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
 
       // Checkbox: - [ ] Phase N: → - [x] Phase N: (...completed DATE)
+      // #3537: padding-tolerant fragment so the caller-resolved padded id
+      // matches un-padded ROADMAP prose.
+      const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
       const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${escapeRegex(phaseNum)}[:\\s][^\\n]*)`,
+        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}[:\\s][^\\n]*)`,
         'i'
       );
       roadmapContent = roadmapContent.replace(checkboxPattern, `$1x$2 (completed ${today})`);
 
       // Progress table: update Status to Complete, add date (handles 4 or 5 column tables)
-      const phaseEscaped = escapeRegex(phaseNum);
       const tableRowPattern = new RegExp(
         `^(\\|\\s*${phaseEscaped}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
         'im'
@@ -1087,13 +1190,15 @@ function cmdPhaseComplete(cwd, phaseNum, raw) {
         roadmapContent = roadmapContent.replace(planCheckboxPattern, '$1x$2');
       }
 
-      atomicWriteFileSync(roadmapPath, roadmapContent);
+      platformWriteSync(roadmapPath, roadmapContent);
 
       // Update REQUIREMENTS.md traceability for this phase's requirements
       const reqPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
       if (fs.existsSync(reqPath)) {
-        // Extract the current phase section from roadmap (scoped to avoid cross-phase matching)
-        const phaseEsc = escapeRegex(phaseNum);
+        // Extract the current phase section from roadmap (scoped to avoid cross-phase matching).
+        // #3537: padding-tolerant fragment so an un-padded `Phase 2.7:` heading
+        // is found when caller resolved to padded `02.7`.
+        const phaseEsc = phaseMarkdownRegexSource(phaseNum);
         const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
         const phaseSectionMatch = currentMilestoneRoadmap.match(
           new RegExp(`(#{2,4}\\s*Phase\\s+${phaseEsc}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`, 'i')
@@ -1156,7 +1261,7 @@ function cmdPhaseComplete(cwd, phaseNum, raw) {
           );
         }
 
-        atomicWriteFileSync(reqPath, reqContent);
+        platformWriteSync(reqPath, reqContent);
         requirementsUpdated = true;
       }
     });
@@ -1319,6 +1424,7 @@ module.exports = {
   cmdPhasePlanIndex,
   cmdPhaseAdd,
   cmdPhaseAddBatch,
+  cmdPhaseMvpMode,
   cmdPhaseInsert,
   cmdPhaseRemove,
   cmdPhaseComplete,

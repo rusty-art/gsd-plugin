@@ -28,15 +28,23 @@ import { extractFrontmatter, stripFrontmatter } from './frontmatter.js';
 import { reconstructFrontmatter, spliceFrontmatter } from './frontmatter-mutation.js';
 import {
   comparePhaseNum,
-  escapeRegex,
   normalizePhaseName,
   phaseTokenMatches,
   planningPaths,
   normalizeMd,
-  stateExtractField,
 } from './helpers.js';
 import { buildStateFrontmatter, getMilestonePhaseFilter } from './state.js';
+import {
+  stateExtractField,
+  stateReplaceField,
+  stateReplaceFieldWithFallback,
+  stateReplaceFieldIfTemplate,
+  stateReplaceFieldIfTemplateWithFallback,
+  isStateTemplateDefault,
+} from './state-document.js';
 import type { QueryHandler } from './utils.js';
+
+const PROGRESS_FRONTMATTER_FIELDS = new Set(['Progress', 'Total Plans in Phase', 'Total Phases']);
 
 // ─── Process exit lock cleanup (D2 — match CJS state.cjs:16-23) ─────────
 
@@ -52,48 +60,7 @@ process.on('exit', () => {
   }
 });
 
-// ─── stateReplaceField ────────────────────────────────────────────────────
-
-/**
- * Replace a field value in STATE.md content.
- *
- * Uses separate regex instances (no g flag) to avoid lastIndex persistence.
- * Supports both **bold:** and plain: formats.
- *
- * @param content - STATE.md content
- * @param fieldName - Field name to replace
- * @param newValue - New value to set
- * @returns Updated content, or null if field not found
- */
-export function stateReplaceField(content: string, fieldName: string, newValue: string): string | null {
-  const escaped = escapeRegex(fieldName);
-  // Try **Field:** bold format first
-  const boldPattern = new RegExp(`(\\*\\*${escaped}:\\*\\*\\s*)(.*)`, 'i');
-  if (boldPattern.test(content)) {
-    return content.replace(new RegExp(`(\\*\\*${escaped}:\\*\\*\\s*)(.*)`, 'i'), (_match, prefix: string) => `${prefix}${newValue}`);
-  }
-  // Try plain Field: format
-  const plainPattern = new RegExp(`(^${escaped}:\\s*)(.*)`, 'im');
-  if (plainPattern.test(content)) {
-    return content.replace(new RegExp(`(^${escaped}:\\s*)(.*)`, 'im'), (_match, prefix: string) => `${prefix}${newValue}`);
-  }
-  return null;
-}
-
-/**
- * Replace a field with fallback field name support.
- *
- * Tries primary first, then fallback. Returns content unchanged if neither matches.
- */
-function stateReplaceFieldWithFallback(content: string, primary: string, fallback: string | null, value: string): string {
-  let result = stateReplaceField(content, primary, value);
-  if (result) return result;
-  if (fallback) {
-    result = stateReplaceField(content, fallback, value);
-    if (result) return result;
-  }
-  return content;
-}
+export { stateReplaceField };
 
 /**
  * Update fields within the ## Current Position section.
@@ -107,17 +74,33 @@ function updateCurrentPositionFields(content: string, fields: Record<string, str
 
   let posBody = posMatch[2];
 
-  if (fields.status && /^Status:/m.test(posBody)) {
-    posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+  // Status and Last activity in the body-text Current Position section are "soft"
+  // fields the executor may hand-author. Preserve non-template-default content; only
+  // overwrite when the existing value looks like prior handler output. Plan is the
+  // structural summary line ("Plan: N of M") and the handler always owns it.
+  if (fields.status) {
+    const statusLine = posBody.match(/^Status:[ \t]*(.+)$/m);
+    if (statusLine) {
+      if (isStateTemplateDefault(statusLine[1])) {
+        posBody = posBody.replace(/^Status:.*$/m, `Status: ${fields.status}`);
+      }
+      // Else: executor authored. Preserve.
+    }
   }
-  if (fields.lastActivity && /^Last activity:/im.test(posBody)) {
-    posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+  if (fields.lastActivity) {
+    const lastActivityLine = posBody.match(/^Last activity:[ \t]*(.+)$/im);
+    if (lastActivityLine) {
+      if (isStateTemplateDefault(lastActivityLine[1])) {
+        posBody = posBody.replace(/^Last activity:.*$/im, `Last activity: ${fields.lastActivity}`);
+      }
+      // Else: executor authored. Preserve.
+    }
   }
   if (fields.plan && /^Plan:/m.test(posBody)) {
     posBody = posBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
   }
 
-  return content.replace(posPattern, `${posMatch[1]}${posBody}`);
+  return content.replace(posPattern, () => `${posMatch[1]}${posBody}`);
 }
 
 /** Port of `readTextArgOrFile` from `state.cjs` — inline text or file path under project root. */
@@ -234,10 +217,15 @@ export async function releaseStateLock(lockPath: string): Promise<void> {
  * Strips existing frontmatter, rebuilds from body + disk, and splices back.
  * Preserves existing status when body-derived status is 'unknown'.
  */
-async function syncStateFrontmatter(content: string, projectDir: string): Promise<string> {
+async function syncStateFrontmatter(
+  content: string,
+  projectDir: string,
+  workstream?: string,
+  options: { preserveExistingProgress?: boolean } = {},
+): Promise<string> {
   const existingFm = extractFrontmatter(content);
   const body = stripFrontmatter(content);
-  const derivedFm = await buildStateFrontmatter(body, projectDir);
+  const derivedFm = await buildStateFrontmatter(body, projectDir, workstream, options);
 
   // Preserve existing status when body-derived is 'unknown'
   if (derivedFm.status === 'unknown' && existingFm.status && existingFm.status !== 'unknown') {
@@ -261,8 +249,10 @@ async function readModifyWriteStateMd(
   projectDir: string,
   modifier: (content: string) => string | Promise<string>,
   workstream?: string,
+  options: { resync?: boolean; preserveExistingProgress?: boolean } = {},
 ): Promise<string> {
   const statePath = planningPaths(projectDir, workstream).state;
+  const resync = options.resync !== false;
   const lockPath = await acquireStateLock(statePath);
   try {
     let content: string;
@@ -274,9 +264,18 @@ async function readModifyWriteStateMd(
     // Strip frontmatter before passing to modifier so that regex replacements
     // operate on body fields only (not on YAML frontmatter keys like 'status:').
     // syncStateFrontmatter rebuilds frontmatter from the modified body + disk.
+    const preFm = extractFrontmatter(content);
     const body = stripFrontmatter(content);
     const modified = await modifier(body);
-    const synced = await syncStateFrontmatter(modified, projectDir);
+    let synced = await syncStateFrontmatter(modified, projectDir, workstream, {
+      preserveExistingProgress: options.preserveExistingProgress,
+    });
+    if (!resync && preFm && preFm.progress) {
+      const postFm = extractFrontmatter(synced);
+      postFm.progress = preFm.progress;
+      const yamlStr = reconstructFrontmatter(postFm);
+      synced = `---\n${yamlStr}\n---\n\n${stripFrontmatter(synced)}`;
+    }
     const normalized = normalizeMd(synced);
     await writeFile(statePath, normalized, 'utf-8');
     return normalized;
@@ -305,7 +304,7 @@ export async function readModifyWriteStateMdFull(
       /* missing */
     }
     const modified = await modifier(content);
-    const synced = await syncStateFrontmatter(modified, projectDir);
+    const synced = await syncStateFrontmatter(modified, projectDir, workstream);
     await writeFile(statePath, normalizeMd(synced), 'utf-8');
   } finally {
     await releaseStateLock(lockPath);
@@ -332,6 +331,7 @@ export const stateUpdate: QueryHandler = async (args, projectDir, workstream) =>
   }
 
   let updated = false;
+  const shouldResync = PROGRESS_FRONTMATTER_FIELDS.has(field);
   await readModifyWriteStateMd(projectDir, (content) => {
     const result = stateReplaceField(content, field, value);
     if (result) {
@@ -339,7 +339,10 @@ export const stateUpdate: QueryHandler = async (args, projectDir, workstream) =>
       return result;
     }
     return content;
-  }, workstream);
+  }, workstream, {
+    resync: shouldResync,
+    preserveExistingProgress: !shouldResync,
+  });
 
   return { data: { updated } };
 };
@@ -377,6 +380,7 @@ export const statePatch: QueryHandler = async (args, projectDir, workstream) => 
 
   const updated: string[] = [];
   const failed: string[] = [];
+  const shouldResync = Object.keys(patches).some(field => PROGRESS_FRONTMATTER_FIELDS.has(field));
   await readModifyWriteStateMd(projectDir, (content) => {
     for (const [field, value] of Object.entries(patches)) {
       const result = stateReplaceField(content, field, String(value));
@@ -388,7 +392,10 @@ export const statePatch: QueryHandler = async (args, projectDir, workstream) => 
       }
     }
     return content;
-  }, workstream);
+  }, workstream, {
+    resync: shouldResync,
+    preserveExistingProgress: !shouldResync,
+  });
 
   return { data: { updated, failed } };
 };
@@ -524,7 +531,7 @@ export const stateBeginPhase: QueryHandler = async (args, projectDir, workstream
         posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
       }
 
-      content = content.replace(positionPattern, `${header}${posBody}`);
+      content = content.replace(positionPattern, () => `${header}${posBody}`);
       updated.push('Current Position');
     }
 
@@ -585,9 +592,13 @@ export const stateAdvancePlan: QueryHandler = async (_args, projectDir, workstre
     }
 
     if (currentPlan >= totalPlans) {
-      // Phase complete
-      content = stateReplaceFieldWithFallback(content, 'Status', null, 'Phase complete — ready for verification');
-      content = stateReplaceFieldWithFallback(content, 'Last Activity', 'Last activity', today);
+      // Phase complete. Status and Last Activity are "soft" fields the executor
+      // may author with rich context (e.g., "Plan 00-02 (Pre-Copy gate) execution
+      // complete; gate-sign pending operator merge of five PRs across two repos").
+      // Use the template-only replace so executor-authored content is preserved
+      // (issue #9, v2.45.0).
+      content = stateReplaceFieldIfTemplate(content, 'Status', 'Phase complete — ready for verification').content;
+      content = stateReplaceFieldIfTemplateWithFallback(content, 'Last Activity', 'Last activity', today).content;
       content = updateCurrentPositionFields(content, {
         status: 'Phase complete — ready for verification',
         lastActivity: today,
@@ -612,8 +623,10 @@ export const stateAdvancePlan: QueryHandler = async (_args, projectDir, workstre
       planDisplayValue = `${newPlan} of ${totalPlans}`;
       content = stateReplaceField(content, 'Current Plan', String(newPlan)) || content;
     }
-    content = stateReplaceFieldWithFallback(content, 'Status', null, 'Ready to execute');
-    content = stateReplaceFieldWithFallback(content, 'Last Activity', 'Last activity', today);
+    // Status and Last Activity are "soft" — preserve executor-authored content
+    // (issue #9, v2.45.0). Plan is the structural summary line; always own it.
+    content = stateReplaceFieldIfTemplate(content, 'Status', 'Ready to execute').content;
+    content = stateReplaceFieldIfTemplateWithFallback(content, 'Last Activity', 'Last activity', today).content;
     content = updateCurrentPositionFields(content, {
       status: 'Ready to execute',
       lastActivity: today,
@@ -1033,26 +1046,40 @@ export const stateAddRoadmapEvolution: QueryHandler = async (args, projectDir, w
 export const stateRecordSession: QueryHandler = async (args, projectDir, workstream) => {
   const parsed = parseNamedArgs(args, ['stopped-at', 'resume-file']);
   const stoppedAt = parsed['stopped-at'] as string | null | undefined;
-  const resumeFile = ((parsed['resume-file'] as string | null) ?? 'None');
+  // Issue #9 (v2.45.0): no more `?? 'None'` default. When the caller does not pass
+  // --resume-file, leave any existing Resume File value untouched (it may point at
+  // a real SUMMARY.md the executor just authored). Clobbering to 'None' silently
+  // drops that pointer.
+  const resumeFile = (parsed['resume-file'] as string | null | undefined) ?? null;
 
   const now = new Date().toISOString();
   const updated: string[] = [];
 
   await readModifyWriteStateMd(projectDir, (content) => {
+    // "Last session" / "Last Date" are timestamp fields the handler owns. Update
+    // unconditionally (the new ISO timestamp is fresher than any prior value).
     let result = stateReplaceField(content, 'Last session', now);
     if (result) { content = result; updated.push('Last session'); }
     result = stateReplaceField(content, 'Last Date', now);
     if (result) { content = result; updated.push('Last Date'); }
 
     if (stoppedAt) {
+      // Caller explicitly passed --stopped-at. They are claiming authority here;
+      // overwrite even if executor wrote rich content. To preserve executor content
+      // skip --stopped-at entirely (don't pass the flag).
       result = stateReplaceField(content, 'Stopped At', stoppedAt);
       if (!result) result = stateReplaceField(content, 'Stopped at', stoppedAt);
       if (result) { content = result; updated.push('Stopped At'); }
     }
 
-    result = stateReplaceField(content, 'Resume File', resumeFile);
-    if (!result) result = stateReplaceField(content, 'Resume file', resumeFile);
-    if (result) { content = result; updated.push('Resume File'); }
+    if (resumeFile !== null) {
+      // Caller explicitly passed --resume-file. Overwrite the pointer.
+      result = stateReplaceField(content, 'Resume File', resumeFile);
+      if (!result) result = stateReplaceField(content, 'Resume file', resumeFile);
+      if (result) { content = result; updated.push('Resume File'); }
+    }
+    // No --resume-file arg: skip the field entirely (preserve whatever was there,
+    // including executor-set pointers like "00-02-SUMMARY.md").
 
     return content;
   }, workstream);
@@ -1094,23 +1121,30 @@ export const statePlannedPhase: QueryHandler = async (args, projectDir, workstre
   const updated: string[] = [];
 
   await readModifyWriteStateMd(projectDir, (content) => {
-    let result = stateReplaceField(content, 'Status', 'Ready to execute');
-    if (result) { content = result; updated.push('Status'); }
+    // Status and Last Activity are soft fields. Preserve executor-authored content
+    // (issue #9, v2.45.0). Total Plans in Phase is structural; handler owns it.
+    const statusResult = stateReplaceFieldIfTemplate(content, 'Status', 'Ready to execute');
+    if (statusResult.outcome === 'replaced') { content = statusResult.content; updated.push('Status'); }
+    else if (statusResult.outcome === 'preserved') { updated.push('Status (preserved: executor-authored)'); }
 
     if (planCount !== null) {
-      result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
+      const result = stateReplaceField(content, 'Total Plans in Phase', String(planCount));
       if (result) { content = result; updated.push('Total Plans in Phase'); }
     }
 
-    result = stateReplaceField(content, 'Last Activity', today);
-    if (result) { content = result; updated.push('Last Activity'); }
+    const activityResult = stateReplaceFieldIfTemplate(content, 'Last Activity', today);
+    if (activityResult.outcome === 'replaced') { content = activityResult.content; updated.push('Last Activity'); }
+    else if (activityResult.outcome === 'preserved') { updated.push('Last Activity (preserved: executor-authored)'); }
 
-    result = stateReplaceField(
+    // Last Activity Description is a "what just happened" pointer. Preserve
+    // executor-authored content; only overwrite template defaults.
+    const descResult = stateReplaceFieldIfTemplate(
       content,
       'Last Activity Description',
-      `Phase ${phaseLabel} planning complete — ${planCount ?? '?'} plans ready`,
+      `Phase ${phaseLabel} planning complete - ${planCount ?? '?'} plans ready`,
     );
-    if (result) { content = result; updated.push('Last Activity Description'); }
+    if (descResult.outcome === 'replaced') { content = descResult.content; updated.push('Last Activity Description'); }
+    else if (descResult.outcome === 'preserved') { updated.push('Last Activity Description (preserved: executor-authored)'); }
 
     content = updateCurrentPositionFields(content, {
       status: 'Ready to execute',
@@ -1637,8 +1671,32 @@ export const statePrune: QueryHandler = async (args, projectDir, workstream) => 
   }
 
   const fullContent = await readFile(statePath, 'utf-8');
-  const currentPhaseRaw = stateExtractField(fullContent, 'Current Phase');
-  const currentPhase = parseInt(String(currentPhaseRaw ?? ''), 10) || 0;
+  const fm = extractFrontmatter(fullContent);
+  const fmProgress = (typeof fm.progress === 'object' && fm.progress !== null)
+    ? fm.progress as Record<string, unknown>
+    : null;
+  const phaseCandidates: unknown[] = [
+    fm.current_phase,
+    stateExtractField(fullContent, 'Current Phase'),
+    fmProgress?.completed_phases,
+    fmProgress?.total_phases,
+  ];
+  let currentPhase: number | null = null;
+  for (const candidate of phaseCandidates) {
+    const parsed = parseInt(String(candidate ?? '').trim(), 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      currentPhase = parsed;
+      break;
+    }
+  }
+  if (currentPhase === null) {
+    return {
+      data: {
+        pruned: false,
+        reason: 'Could not determine current phase from STATE.md. Add **Current Phase:** N, frontmatter current_phase: N, progress.completed_phases, or progress.total_phases.',
+      },
+    };
+  }
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {

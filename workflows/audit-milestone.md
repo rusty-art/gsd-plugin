@@ -143,7 +143,7 @@ For each REQ-ID, determine status using all three sources:
 Skip if `workflow.nyquist_validation` is explicitly `false` (absent = enabled).
 
 ```bash
-NYQUIST_CONFIG=$(gsd-sdk query config-get workflow.nyquist_validation --raw 2>/dev/null)
+NYQUIST_CONFIG=$(gsd-sdk query config-get workflow.nyquist_validation --raw --default true)
 ```
 
 If `false`: skip entirely.
@@ -281,7 +281,7 @@ per group of related gaps) using the standard phase chain:
 
 /clear then:
 
-/gsd-phase --insert <N> "Close gap: <REQ-ID> — <description>"
+/gsd:phase --insert <N> "Close gap: <REQ-ID> — <description>"
 /gsd:discuss-phase <N>
 /gsd:plan-phase <N>
 /gsd:execute-phase <N>
@@ -332,7 +332,7 @@ Insert a closure phase using the standard chain:
 
 /clear then:
 
-/gsd-phase --insert <N> "Address tech debt: <area>"
+/gsd:phase --insert <N> "Address tech debt: <area>"
 /gsd:discuss-phase <N>
 /gsd:plan-phase <N>
 /gsd:execute-phase <N>

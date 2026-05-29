@@ -8,6 +8,471 @@ History before 2.38.2 lives in git + the per-milestone archive (see `.planning/m
 
 ## [Unreleased]
 
+## [2.45.1] - 2026-05-29  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Merge `upstream/master` (v2.45.0) into the fork. No code conflicts — the upstream `get-shit-done-cc` → `get-shit-done-redux` rename and the SDK probe refactor auto-merged cleanly; only version/changelog metadata collided. Patch bump marks the fork's local delta re-applied on top of the new upstream base.
+
+### Changed
+- Re-confirmed the fork's `gsd-context-monitor.js` disable (see [2.42.7] below) survives the merge: the `PostToolUse` registration is absent from the merged `hooks/hooks.json`, and the script file is retained for future merge-friendliness.
+- `version` bumped to `2.45.1` in `plugin.json` and `marketplace.json` (upstream `2.45.0` + fork patch).
+
+## [2.45.0] - 2026-05-27  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Fixes [#9](https://github.com/jnuyens/gsd-plugin/issues/9) reported by @jasonburks23: SDK state handlers (`state.advance-plan`, `state.record-session`, `state.planned-phase`) were overwriting executor-authored STATE.md content with template defaults. Data-loss-shape bug: rich `last_activity`, narrative `Status`, contextual `Stopped at`, and executor-set `Resume file` pointers all got clobbered when the post-execution handlers ran.
+
+Minor version bump because the state-handler contract changed (the handlers now preserve executor-authored content under a defined ownership table, not just blindly overwrite).
+
+### Fixed
+- **`sdk/src/query/state-mutation.ts` `stateAdvancePlan`**: stopped unconditionally overwriting `Status` and `Last Activity` with `'Ready to execute'` / `today`. Now uses `stateReplaceFieldIfTemplate` which preserves the existing value if it's not a known template default. Structural fields (`Plan: N of M`, frontmatter progress) still owned by the handler unconditionally.
+- **`sdk/src/query/state-mutation.ts` `stateRecordSession`**: removed the `?? 'None'` default for `--resume-file`. When the caller does NOT pass `--resume-file`, the existing Resume File value is preserved (no more clobber to literal `'None'`). When the caller DOES pass `--resume-file`, behavior is unchanged (caller authority wins). Same treatment for `--stopped-at`.
+- **`sdk/src/query/state-mutation.ts` `statePlannedPhase`**: same preservation treatment for `Status`, `Last Activity`, and `Last Activity Description`. `Total Plans in Phase` remains handler-owned.
+- **`sdk/src/query/state-mutation.ts` `updateCurrentPositionFields` helper**: applies the same preservation to the body-text `## Current Position` section's `Status` and `Last activity` lines. `Plan: N of M` summary line still handler-owned.
+
+### Added
+- **`sdk/src/query/state-document.ts` `KNOWN_TEMPLATE_DEFAULTS` set**: the values the handlers historically write (`'Ready to execute'`, the em-dash and ASCII-hyphen variants of `'Phase complete - ready for verification'`, `'unknown'`, `'None'`, `'TBD'`, empty string). Plus bare ISO dates and ISO timestamps with no descriptive suffix.
+- **`sdk/src/query/state-document.ts` `isStateTemplateDefault(value)` predicate**: checks a string against the set.
+- **`sdk/src/query/state-document.ts` `stateReplaceFieldIfTemplate()` and `stateReplaceFieldIfTemplateWithFallback()` helpers**: the new safe-replace primitives. Return a `{ content, outcome }` object so callers know whether the field was replaced, preserved, or not found. Existing `stateReplaceField` / `stateReplaceFieldWithFallback` retained for handlers that legitimately own a field unconditionally.
+- **Regression tests** in `sdk/src/query/state-mutation.test.ts` (7 new cases, 93 total now, up from 86):
+  - `stateAdvancePlan` preserves executor-authored Status with rich context
+  - `stateAdvancePlan` overwrites template-default Status (`'Ready to execute'`)
+  - `stateAdvancePlan` preserves Last Activity with descriptive suffix
+  - `stateAdvancePlan` overwrites bare-date Last Activity (template shape)
+  - `stateRecordSession` preserves Resume File when `--resume-file` not passed
+  - `stateRecordSession` overwrites Resume File when `--resume-file` IS passed (caller authority)
+  - `stateRecordSession` preserves Resume File when other args passed but not `--resume-file`
+
+### Field-ownership contract (the new behavior)
+
+| Field | Handler-owned (always overwrite) | Executor-owned (preserve unless template) |
+|---|---|---|
+| Frontmatter `percent`, `progress.*`, `last_updated` ISO | ✅ | |
+| Body progress bar `[██░░] 50%` | ✅ | |
+| Body "Plan: N of M" summary line | ✅ | |
+| Body "Last session" timestamp | ✅ | |
+| `Status` field | only when matching `KNOWN_TEMPLATE_DEFAULTS` | otherwise (preserved) |
+| `Last Activity` / `last_activity` field | only when matching `KNOWN_TEMPLATE_DEFAULTS` or bare-date | otherwise (preserved) |
+| `Last Activity Description` | only when matching `KNOWN_TEMPLATE_DEFAULTS` | otherwise (preserved) |
+| `stopped_at` frontmatter / body `Stopped at` | only when caller passes `--stopped-at` | otherwise (preserved) |
+| `Resume File` / `Resume file` | only when caller passes `--resume-file` | otherwise (preserved) |
+| Narrative Current Position lines beyond Status/Last activity/Plan | never | always preserved |
+
+### Migration / behavior change notes
+
+If your project's STATE.md previously had `Status: Ready to execute` (template default) and you ran a workflow that calls `state.advance-plan`, the behavior is the same as before: the field gets updated. The change is ONLY visible when the existing value is non-template content (i.e., the executor wrote something rich there).
+
+If a downstream workflow was secretly relying on the `?? 'None'` default to clear a stale Resume File pointer, that's now a no-op when `--resume-file` is omitted. To explicitly clear: pass `--resume-file None` (literal value). To set a new pointer: pass `--resume-file <new-path>`.
+
+### Acknowledgments
+Thanks @jasonburks23 for the detailed report with the full diff showing what each handler clobbered, the three workarounds you'd already considered, and the suggested fix direction (Option 2: field ownership). Made this a "build the agreed contract" task instead of an "investigate the bug" task.
+
+### Upstream
+- Same handlers exist verbatim in `open-gsd/get-shit-done-redux/sdk/src/query/state-mutation.ts`. Will file as a fix-track bug issue with the same proposed diff + new helper functions + test cases. Sibling-track to [#138](https://github.com/open-gsd/get-shit-done-redux/issues/138), [#160](https://github.com/open-gsd/get-shit-done-redux/issues/160), [#163](https://github.com/open-gsd/get-shit-done-redux/issues/163), [#222](https://github.com/open-gsd/get-shit-done-redux/issues/222).
+
+## [2.44.6] - 2026-05-27  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Fixes [#8](https://github.com/jnuyens/gsd-plugin/issues/8): `/gsd:update` was 404ing because workflows referenced the unscoped `get-shit-done-redux` npm package name instead of the actual scoped `@opengsd/get-shit-done-redux`. Reported by @chendrizzy with a complete patch attached. Thank you.
+
+### Background
+
+The v2.43.6 upstream switch renamed `get-shit-done-cc` to `get-shit-done-redux` across docs, but the npm package actually lives at the scoped name `@opengsd/get-shit-done-redux`. The bundled `bin/check-latest-version.cjs` correctly encoded the scoped name (per a comment explaining it was made a constant *specifically* to prevent LLM-driven misuse of wrong-shaped names), but the workflow-side install commands drifted. Result: `/gsd:update` would reach the install step and 404 on the npm registry.
+
+### Fixed
+- **`workflows/update.md`**: four call sites at L329 (manual-install hint), L530 (LOCAL install), L535 (GLOBAL install), L540 (UNKNOWN-fallback install). All now use `@opengsd/get-shit-done-redux@latest`. Patch matches the upstream-tree form exactly.
+- **`workflows/new-project.md` L89**: `npx @opengsd/get-shit-done-redux@latest --global` in the agents-not-installed remediation hint.
+- **`workflows/new-milestone.md` L238**: same hint, scoped.
+- **`workflows/help.md` L21, L579**: install-method docs + the comparison line.
+- **`workflows/quick.md` L132**: install-fallback hint when `gsd-sdk` is missing.
+- **`README.md`**: Pre-install uninstall list (added the scoped name as a new line), "For users of upstream GSD" reference, comparison table.
+
+### Notes
+- The unscoped form `npm uninstall -g get-shit-done-redux` is retained in the Pre-install uninstall list as a clean-up sweep for users who tried installing the unscoped name during the v2.43.6 to v2.44.5 window (it 404s, so nothing was installed, but the uninstall is harmless).
+- The bin name `get-shit-done-redux` (without scope prefix) is unchanged: the scoped package registers its CLI entry under that bare name. So `npx -y --package=@opengsd/get-shit-done-redux@latest -- get-shit-done-redux --global` is the correct invocation form.
+
+### Acknowledgments
+Thanks @chendrizzy for the issue report with a turnkey patch.
+
+### Upstream
+- Upstream `open-gsd/get-shit-done-redux` already has the correct scoped form at all call sites. This is a downstream-only drift fix; no upstream issue needed.
+
+## [2.44.5] - 2026-05-25  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Auth-recipe memory: GSD now auto-detects when you authenticate to external systems and lets you save the recipe for future sessions and future projects. User report: "can you add auto-remembering how to connect to other systems or how to gain access to certain accounts?"
+
+Three components shipped together (the user explicitly picked the "Full" scope from a four-option menu rather than incremental phases):
+
+### Added
+- **`hooks/gsd-auth-detector.js`** PostToolUse hook on Bash invocations. Pattern-matches against 18 auth-shaped command shapes (`gh auth login`, `aws configure`, `gcloud auth login`, `vault login`, `ssh-keygen`, `git config user.signingkey`, env-var assignments like `export *_TOKEN=*`, platform CLIs like `heroku login` / `fly login` / `netlify login` / `vercel login` / `supabase login` / `firebase login` / `railway login`, etc.). On match: writes a sanitized JSON line to `.planning/.pending-auth-captures.jsonl` (the inbox). Hooks cannot use AskUserQuestion, so the inbox pattern lets the user review at their convenience instead of being interrupted inline.
+- **Secret redaction in the detector**. Before any inbox write, the command line is run through redaction rules: `--token=X` / `--password=X` / `--api-key=X` style flags get the value replaced with `[REDACTED]`; env-var assignments to credential-named vars get the value replaced; long base64-ish tokens (40+ chars) get masked; AWS access keys (`AKIA*`, `ASIA*`) get masked; GitHub PATs (`ghp_*`, `gho_*`, etc.) get masked. The inbox stores the SHAPE of the command, never the secret.
+- **`skills/remember-access/SKILL.md`** + **`workflows/remember-access.md`**: new `/gsd:remember-access` skill with two modes. Manual capture (`/gsd:remember-access <system>`) walks the user through documenting auth method, setup commands, credential locations, verification command, and freeform notes. Inbox review (`/gsd:remember-access --review`) surfaces each pending detection and lets the user confirm-and-save or discard per entry. Confirmed recipes go to `.planning/AUTH-RECIPES.md` (per-project) and optionally `~/.claude/auth-recipes/<system>.md` (cross-project, survives across new projects).
+- **PostToolUse hook registration** in `hooks/hooks.json` for the auth detector. Follows the same plugin-version-fallback Node inline resolver pattern as the other hooks.
+
+### Changed
+- **`README.md` `## Added features beyond upstream` table**: two new rows. `/gsd:remember-access` (v2.44.5) and `/gsd:new-ddd` updated to reference `docs/SPEC.md` instead of legacy `DOCS.md`. Also added the v2.44.4 auto-approve row that was missed in the previous release.
+
+### Privacy notes
+
+The hook never stores secret values. The redaction rules are conservative (over-redact rather than miss). If a command shape gets redacted that you wanted to capture, you can re-enter the raw command during the `/gsd:remember-access --review` flow — the auto-detected inbox entry is a starting point, not the final recipe.
+
+The user-global file at `~/.claude/auth-recipes/<system>.md` is NOT committed to git. It lives outside the project repo so credential-adjacent metadata does not leak through public repos.
+
+### Held for future releases
+- Workflow integration: workflows that hit auth-likely operations (`gh api`, `aws s3`, etc.) could surface the relevant recipe before the operation fails on missing credentials. Not in v2.44.5; deferred until usage patterns are clearer.
+- Recipe-driven auto-execute: GSD could replay a recipe automatically (with user confirmation) when fresh credentials are needed. High value, higher risk of doing the wrong thing; held.
+- More auth patterns: the initial 18 patterns cover the common cases. Add more as users report missed detections.
+
+### Upstream
+- Plugin-native concept. Will file as upstream enhancement once the pattern stabilizes through real-project use.
+
+## [2.44.4] - 2026-05-25  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Removes two AFK-blocking approval prompts on non-critical artifact drafts. When the user invokes `/gsd:new-project` or `/gsd:new-ddd` and walks away, the workflow no longer waits indefinitely on a yes-answer for the roadmap or SPEC.md draft. Auto-decisions are logged to a new `.planning/AUTO-DECISIONS.md` file the user can spot-check.
+
+### Background
+
+User report: "if then gsd-plugin comes back to ask for a relatively stupid 'ok to proceed', the end user needs to wait before the system continues, losing valuable total project time." The fix is to skip the prompt for non-critical artifacts (ROADMAP draft, SPEC.md draft) where the user retains full ability to intervene after the fact by editing the artifact or re-invoking the workflow.
+
+Investigated implementing a 5-minute interactive keyboard timeout but Claude Code's Bash tool does not expose stdin to spawned commands, so the obvious `read -t 300` pattern is not feasible. Auto-proceed with prominent logging is the closest workable shape and addresses the actual AFK pain.
+
+### Added
+- **`workflow.auto_approve_non_critical` config field** (default `true`). When `true`, approval prompts classified as non-critical are skipped and auto-approved. Set to `false` to restore the old prompt-everything behavior.
+- **`.planning/AUTO-DECISIONS.md` file** auto-created on first auto-decision. Markdown table with `| Timestamp | Workflow | Decision | Artifact |` rows. User reviews periodically to spot-check; can revert any artifact and re-run the workflow if disagreement found.
+
+### Changed
+- **`workflows/new-project.md` ROADMAP approval gate**: new "Auto-approve gate (non-critical artifact)" subsection added before the existing AskUserQuestion logic. When config is `true` (default), the workflow skips the prompt, logs the auto-decision to `.planning/AUTO-DECISIONS.md`, and continues to commit. When config is `false`, falls through to the original interactive Approve/Adjust/Review prompt.
+- **`workflows/new-ddd.md` SPEC.md approval gate**: same shape applied to the DDD spec approval. Default auto-approves; config opt-out restores interactive Approve/Revise/Edit-manually prompt.
+
+### What's classified as non-critical (and why)
+
+Non-critical = the artifact lives on disk after the decision, no destructive action is taken at the gate, and the user can intervene after the fact by editing the artifact or re-invoking the workflow.
+
+- ROADMAP draft: meets all three criteria. Lives at `.planning/ROADMAP.md`; commit is non-destructive; user can edit and re-run `/gsd:plan-phase 1`.
+- SPEC.md draft: meets all three. Lives at `docs/SPEC.md`; commit is non-destructive; user can edit before phase execution begins.
+
+### What's still critical (and stays prompting)
+
+- **Verification gaps** (`/gsd:verify-work`): the human-judgment cases where the user's input genuinely matters. Auto-anything here risks accepting bad output.
+- **Architectural deviations** (executor agent Rule 4): structural changes requiring user decision. The executor's existing classification (Rules 1-3 auto-fix, Rule 4 always prompt) already handles this layer correctly; no changes needed.
+- **Package install failures** (executor Rule 3 exclusion): possible slopsquatted or hallucinated package names. Always require human verification before installing a substitute.
+- **`--auto` is not the same as this config**: `--auto` enables a fully automatic flow assuming an idea document is provided. The new config skips only the artifact-approval prompts, not other interactive gates.
+
+### Held for a future release
+- **Executor deviation classification with logging**: the executor agent's Rules 1-3 already auto-proceed (no user permission needed), but the auto-decisions go to SUMMARY.md rather than the new central AUTO-DECISIONS.md log. Cross-referencing both logs would give a single pane of glass; held for v2.44.x or v2.45.x.
+- **REQUIREMENTS.md approval gate**: `/gsd:new-project` does not have a single explicit "approve REQUIREMENTS.md" prompt; the requirements get built up through several smaller AskUserQuestion prompts. Refactoring to a single approval gate (and applying the auto-approve treatment) is a larger change deferred until the value is clear from real-project use.
+- **Other workflows with approval-shaped prompts**: `/gsd:new-milestone` ROADMAP approval, `/gsd:plan-milestone-gaps` plan approval, etc. Same pattern applies; will fold in when users report friction or in a sweep release.
+
+### Upstream
+- Plugin-native concept (the `.planning/AUTO-DECISIONS.md` log + `workflow.auto_approve_non_critical` config). Will file as an upstream enhancement proposing the model and per-workflow integration once the pattern has stabilized in real-project use.
+
+## [2.44.3] - 2026-05-24  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Three changes from real-project use of `/gsd:new-ddd`: fixes a synthesizer bug that affects standard `/gsd:new-project` too, moves the DDD spec file to a user-facing path, and adds explicit role separation between PROJECT.md and SPEC.md so GSD-internal language does not leak into the user-facing spec.
+
+### Fixed
+- **`agents/gsd-research-synthesizer.md` Step 6 (Write SUMMARY.md)**: agent prompt strengthened with hard rules to prevent the "wrong assumption about restrictions" failure mode observed in real runs. The previous prompt said "ALWAYS use the Write tool" but the LLM sometimes hallucinated a restriction and returned SUMMARY.md content in the response instead of writing the file, leaving the orchestrator to write it manually. New prompt enumerates five hard rules: use the Write tool (it's in the frontmatter allowlist, no restrictions), do not return content in the response, do not ask permission to write, do not use heredoc, surface Write errors instead of silent fallback. Affects both `/gsd:new-project` and `/gsd:new-ddd`.
+
+### Changed (DDD mode)
+- **SPEC file path moved from `.planning/DOCS.md` to `docs/SPEC.md`** across `workflows/new-ddd.md`, `agents/gsd-roadmapper.md` `<ddd_mode>` block, `workflows/help.md`, `workflows/do.md`, `skills/new-ddd/SKILL.md`, and README features-table description. Reason: the file is user-facing documentation that ships with the project; `.planning/` is the GSD-internal directory and is conventionally hidden / sometimes gitignored. `docs/SPEC.md` puts the file at a discoverable, user-facing location that survives gitignore patterns and reads as project documentation rather than GSD planning state. Filename "SPEC.md" replaces "DOCS.md" everywhere since "spec" more accurately describes the file's role (canonical specification, not just documentation).
+- **New "Role separation between PROJECT.md and `docs/SPEC.md`" subsection** in `workflows/new-ddd.md` Step 6. Explicit guidance table for the orchestrator drafting both files: PROJECT.md is GSD-internal (can talk about phases, plans, roadmap, agent constraints, REQ-IDs, internal decisions); SPEC.md is user-facing (must NOT mention GSD internals; reads as the project's own documentation). Two heuristics for the orchestrator to self-check. Closes a real failure mode observed in early DDD runs where SPEC.md drafts referenced phase numbers and planning artifacts.
+
+### Strategic
+- **DDD work stays in gsd-plugin main branch.** A temporary branch-isolation rule (created earlier on 2026-05-24 while the user considered making DDD a standalone sibling project) was rescinded same-day. The user may split DDD into its own project later "when it works decently, which is not yet the case." Until then, DDD evolves in master like any other plugin feature. The `ddd-spike` branch at https://github.com/jnuyens/gsd-plugin/tree/ddd-spike is retired (no longer the destination for new DDD work) but kept on the remote as historical marker.
+
+### Upstream
+- Synthesizer fix exists upstream in `open-gsd/get-shit-done-redux` at `get-shit-done/agents/gsd-research-synthesizer.md` with the identical bug-shape (same agent, same Step 6 prompt). Will file as fix-track bug issue with the proposed diff.
+- DDD path / role-separation changes extend the existing enhancement issue #212; will be added as a follow-up comment with the new diffs.
+
+## [2.44.2] - 2026-05-24  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Adds `/gsd:new-ddd` to `/gsd:do` smart-router routing. Freeform text describing DDD-shape projects (CLI, library, SDK, API, plugin system) or explicit DDD-mode triggers ("DDD", "docs-driven", "docs-first", "API-first", "README-driven", "write the docs first") now route to `/gsd:new-ddd` instead of `/gsd:new-project`. Generic "start a new project" intent without DDD-shape signals stays on `/gsd:new-project`.
+
+### Changed
+- **`workflows/do.md`** routing table: two new rules added BEFORE the existing `/gsd:new-project` rule (since the table uses first-match precedence). The first rule catches explicit DDD-mode triggers. The second rule catches DDD-shape project descriptions that don't explicitly invoke a specific mode and routes to `/gsd:new-ddd` with the option to disambiguate via the new ambiguity-handling section.
+- **`workflows/do.md`** project-required exception list updated to include `/gsd:new-ddd` alongside `/gsd:new-project` (neither requires an existing `.planning/` directory).
+- **`workflows/do.md`** new "Common ambiguity: `/gsd:new-project` vs. `/gsd:new-ddd`" section documents the prompt template for the dispatcher to ask when shape-ambiguous inputs land. Default fallback is `/gsd:new-project` (older, more general mode) when the user does not pick.
+
+### Upstream
+- DDD mode is plugin-native (see #212 enhancement proposal); the `/gsd:do` routing extension follows naturally. No upstream change needed until DDD itself lands upstream.
+
+## [2.44.1] - 2026-05-24  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Docs catch-up for v2.44.0. The `Added features beyond upstream` table in README.md did not list the new Documentation-Driven Development mode shipped in v2.44.0; this release adds the entry. Patch-level bump so existing users get prompted to update via `/plugin marketplace update` and see the corrected feature listing without a fresh install.
+
+### Changed
+- **`README.md` `## Added features beyond upstream` table**: new top row documenting `/gsd:new-ddd`. Cross-references the v2.44.0 release for the full description and the held-back items.
+
+## [2.44.0] - 2026-05-24  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+**New mode: Documentation-Driven Development (DDD).** Adds `/gsd:new-ddd` as a sibling to `/gsd:new-project`. DDD mode is for projects where the user-facing surface is the deliverable (CLIs, libraries, SDKs, APIs, plugin systems): the user validates a `DOCS.md` (user-facing documentation as the spec) before any phase work begins, and phases are derived from DOCS.md sections rather than from REQ-ID clusters.
+
+This is a minimal sketch (intentionally not the full implementation). Per-phase docs-sync automation, docs-aware verification, and DOCS.md drift detection in /gsd:next are held for v2.45.x and later, pending real-project usage to inform the design. The minimal sketch encodes DDD in the project-initialization sequence and the roadmapper's source-of-truth choice, which is enough to use the mode end-to-end with manual doc updates during execution.
+
+### Added
+- **`skills/new-ddd/SKILL.md`**: new top-level skill `/gsd:new-ddd`. Thin entry point that delegates to `workflows/new-ddd.md`. Inherits the `--auto` flag from `/gsd:new-project`. Includes guidance on when to use DDD vs. standard new-project.
+- **`workflows/new-ddd.md`**: full DDD initialization workflow. Reuses shared steps from `workflows/new-project.md` (setup, questioning, brownfield mapping, config capture, research) and overrides the requirements-gathering step with DOCS.md drafting + user validation. Generates a thin `REQUIREMENTS.md` (one `DOC-NN` per DOCS.md H2 section) for traceability compatibility with existing downstream workflows.
+- **`agents/gsd-roadmapper.md` `<ddd_mode>` block**: documents the inputs the roadmapper reads in DDD mode, the phase-derivation heuristic (cluster DOCS.md H2 sections), the success-criteria shape (anchored at DOCS.md sections), and the coverage-validation model (every H2 maps to exactly one phase). Adds a per-phase `**DDD spec anchor**:` line to ROADMAP.md output.
+
+### Changed
+- **`agents/gsd-roadmapper.md` spawned-by list**: now includes `/gsd:new-ddd`, `/gsd:new-milestone`, and `/gsd:plan-milestone-gaps` (the latter two were always callers but were not documented in the agent header).
+- **`workflows/help.md`**: documents `/gsd:new-ddd` in the Discovery & Specification section.
+
+### Held for future releases (v2.45.x and beyond)
+- Per-phase `/gsd:docs-sync` workflow that detects implementation-vs-DOCS.md drift during execution and updates DOCS.md sections.
+- Docs-aware verification (a `gsd-docs-checker` agent or extension of `gsd-verifier`) that confirms implementation matches the corresponding DOCS.md section.
+- DOCS.md drift detection in `/gsd:next` that warns when DOCS.md was edited since last verification.
+- Auto-decomposition of DOCS.md into fine-grained REQ-IDs (currently one per H2 section; richer mapping would track per-command / per-endpoint / per-extension-point items).
+- Dedicated `gsd-ddd-docs-writer` subagent if inline orchestrator drafting becomes context-pressure problematic on large projects.
+
+### Upstream
+- DDD mode is plugin-native; the redux upstream does not have this concept. Will file as an enhancement issue proposing the model and the minimal-sketch shape, with the option to upstream the full implementation later if it proves valuable in real-project use. Same Gate 0 workaround applies (external fork-PRs blocked; diff ships via issue comment).
+
+### Why a minor version bump (2.43.12 -> 2.44.0)
+DDD mode adds a meaningful new top-level command and a new mental model for project initialization. Patch-level bumps have been reserved for fixes and small workflow tweaks; introducing a new mode warrants a minor bump to signal the surface change.
+
+## [2.43.12] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Tightens roadmap granularity defaults in `gsd-roadmapper` to reduce thin-phase / over-fragmentation. The user-side observation that drove this change: roadmaps tended to come back with ~15-20% too many phases, often manifesting as "GSD maintenance" phases (single-requirement, internal-quality goal like "improve performance" or "add tests for X", success criteria that read as tasks not user-observable outcomes) that would have been better folded into the most-related neighbor.
+
+The prior Standard 5-8 default was the main driver: it gave the LLM permission to overshoot by padding for "completeness" even when the work didn't justify a separate phase. Tightening Standard to 4-6 forces consolidation as the baseline; the explicit Fine 6-10 bucket remains available for projects that genuinely need it.
+
+### Changed
+- **`agents/gsd-roadmapper.md` Granularity Calibration table**: Coarse moves from 3-5 to 2-4, Standard from 5-8 to 4-6, Fine from 8-12 to 6-10. Added an inline guidance paragraph below the table naming the thin-phase failure pattern (single requirement, internal-quality goal phrasing, task-shaped success criteria) and instructing the agent to prefer folding into a neighbor over creating a standalone phase in those cases.
+
+### Affected entry points
+- `/gsd:new-project` (initial roadmap generation)
+- `/gsd:new-milestone` (next-milestone roadmap)
+- `/gsd:plan-milestone-gaps` (post-audit fix phases)
+
+All three spawn `gsd-roadmapper`, so the granularity shift applies uniformly.
+
+### Why default-shift not consolidation-pass
+A consolidation pass (re-reading the draft and self-merging thin phases) is a stronger intervention but adds prompt complexity and re-read cost. The granularity tweak is a lighter-touch baseline change; if the pattern persists, a consolidation pass remains the natural next iteration. Tracked as a follow-up if v2.43.12's behavior change is insufficient.
+
+### Upstream
+- Same `gsd-roadmapper` agent exists upstream in `open-gsd/get-shit-done-redux` at `get-shit-done/agents/gsd-roadmapper.md` with identical granularity table. Will file as enhancement issue (this is a behavior tuning, not a bug); same Gate 0 workaround applies (fork-PRs blocked; diff ships via issue comment).
+
+## [2.43.11] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Extends the v2.43.10 Route 0 resume-incomplete-phase invariant from `/gsd:next` to `/gsd:progress` (default mode). The two commands are sibling entry points; `/gsd:next` was patched in v2.43.10, but the default `/gsd:progress` report-and-route flow doesn't go through next.md and so still inherited the same bug-shape: routing based on `current_phase` from STATE.md without first verifying that all earlier phases have complete execution.
+
+Audit performed against all workflows that route on phase state. Surfaced one additional vulnerable workflow (progress.md). Confirmed five other workflows are NOT vulnerable because they already scan all phases via `gsd-sdk query roadmap.analyze` or explicit `find PLAN without SUMMARY` loops: `autonomous.md` iterate (uses disk_status filter), `complete-milestone.md` (disk_status check), `resume-project.md` (explicit incomplete-plan loop), `discuss-phase-assumptions.md` auto_advance (within-phase only), `execute-phase.md` (requires explicit phase argument).
+
+### Fixed
+- **`workflows/progress.md` `route` step**: new "Step 0: Resume-incomplete-phase invariant" added before the existing Step 1. Scans all phases via the `$ROADMAP` JSON already loaded in `analyze_roadmap`, finds the lowest-numbered phase where `plans.length > summaries.length`, routes to `/gsd:execute-phase <that phase>` if found. The progress report from the `report` step still displays first, so the user sees full project status before the routing decision. Skip with `--no-resume` (falls through to existing current-phase counting) or `--force` (bypasses all gates).
+
+### Changed
+- **`workflows/help.md` `/gsd:progress` description**: documents the new mid-execution session safety behavior, including the `--no-resume` opt-out.
+
+### Upstream
+- Same Route 0 fix applies. Will extend issue #160 (the existing /gsd:next fix issue) with the progress.md diff. Both files have the same bug-shape and the fix shape is identical, so bundling reduces maintainer review surface.
+
+## [2.43.10] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Fix for a session-resume bug in `/gsd:next` (and `/gsd:progress --next`). When a session died mid-execution (hang, token exhaustion, API connection disruption) and STATE.md's `current_phase` got advanced past the phase that still had unfinished work, `/gsd:next` would route to a forward action and silently skip the partially-executed phase's incomplete plans. The prior-phase scan in `safety_gates` detected the situation but offered Stop/Defer/Force without a "Resume" option, so the default user response either stopped the workflow (Stop) or filed the unfinished plans to a `999.x` backlog and advanced anyway (Defer).
+
+The fix is a new Route 0 invariant: before any other routing decision, scan all phases for incomplete execution and route to `/gsd:execute-phase <lowest-numbered incomplete phase>` if found. Complete-before-advance is now a hard invariant of the routing layer.
+
+### Fixed
+- **`workflows/next.md`**: new `resume_incomplete_phase` step between `safety_gates` and `spike_sketch_notice`. Scans all phases in ROADMAP order via `gsd-sdk query roadmap.analyze` + `gsd-sdk query find-phase <N>`; the first phase with `plans.length > summaries.length` is the resume target. Routes silently to `/gsd:execute-phase <N>` with a one-line notice naming the phase. Skip the check with `--no-resume` (falls through to the existing prior-phase prompt for explicit defer) or `--force` (skips all gates including this one).
+
+### Changed
+- **`workflows/help.md` `/gsd:progress --next` description**: documents the new auto-resume behavior, the `--no-resume` opt-out, and the existing `--force` bypass.
+
+### Upstream
+- Same routing logic exists upstream in `open-gsd/get-shit-done-redux` at `get-shit-done/workflows/next.md`. Will file as a fix-track bug issue (this is a real correctness bug, not just a UX preference: data loss surface via the silent-defer path) and post the proposed diff. Same Gate 0 workaround applies (fork-PRs blocked; diff ships via issue comment).
+
+## [2.43.9] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Extension of the v2.43.8 auto-use-existing pattern to four additional artifact-existence prompts. Same logic applies: when an artifact already exists and the workflow's natural next step is "use it," prompting for confirmation is friction. The explicit-flag escape hatches (`--refresh` to regenerate, `--view` to print, `--update` for partial refresh on map-codebase) cover every deviation path. Default behavior is now auto-proceed with a one-line notice.
+
+### Changed
+- **`workflows/ui-phase.md` step 4 (UI-SPEC.md existing-artifact handling)**: when `UI-SPEC.md` exists and neither `--refresh` nor `--view` is set, auto-proceeds to step 7 (checker) on the existing spec instead of prompting Update/View/Skip. Replaces the AskUserQuestion with a one-line notice. `--refresh` re-spawns the researcher (was "Update" in the prompt); `--view` prints to stdout and exits. The previous "Skip" path matches the new default behavior.
+- **`workflows/ai-integration-phase.md` step 4 (AI-SPEC.md existing-artifact handling)**: same pattern. Auto-exit with notice when `AI-SPEC.md` exists; `--refresh` re-runs framework-selector and the downstream pipeline; `--view` prints to stdout. Replaces the three-way Update/View/Skip prompt.
+- **`workflows/ui-review.md` step 1 (UI-REVIEW.md existing-artifact handling)**: auto-exit with notice when `UI-REVIEW.md` exists; `--refresh` runs a fresh audit; `--view` prints to stdout. Replaces the two-way Re-audit/View prompt.
+- **`workflows/eval-review.md` step 1 (EVAL-REVIEW.md existing-artifact handling)**: same as ui-review pattern.
+- **`workflows/map-codebase.md` `check_existing` step (codebase/ existing-artifact handling)**: auto-exit with notice when `.planning/codebase/` exists; `--refresh` deletes and remaps; `--update [<docs>]` partial-refreshes (with or without a comma-separated doc list). Replaces the three-way Refresh/Update/Skip prompt.
+- **`workflows/help.md`**: command signatures and per-command descriptions updated to document the new `--refresh`, `--view`, and `--update` flags.
+
+### Upstream
+- All five prompts exist upstream in `open-gsd/get-shit-done-redux`. Will extend the enhancement issue #159 (filed for the analogous RESEARCH.md fix in v2.43.8) with the four additional prompts, or file a sibling issue if maintainer prefers narrower scope per issue. Same Gate 0 workaround pattern applies (fork-PRs blocked; diff posted as issue comment).
+
+## [2.43.8] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+UX refinement in research-only mode. `/gsd:plan-phase --research-phase N` used to prompt with a three-way Update/View/Skip menu when `RESEARCH.md` already existed for the target phase. The friction outweighed the value in practice: callers reaching for `--research-phase` either want to refresh research (covered by `--research`) or print it (covered by `--view`); the third option ("Skip") was the prompt's reason for existing, but it duplicated what auto-proceed-with-existing would do anyway. The standard `/gsd:plan-phase N` flow at §5.1 already auto-uses existing research without prompting; research-only mode now matches that behavior.
+
+### Changed
+- **`workflows/plan-phase.md` §5.0 (research-only existing-artifact handling)**: when `RESEARCH.md` already exists and neither `--research` nor `--view` is set, emit a one-line notice naming the file and exit cleanly. No more Update/View/Skip prompt. The explicit-flag escape hatches (`--research` for force-refresh, `--view` for print) still work and are now the only paths that deviate from "use existing." Help text in `workflows/help.md` updated to match.
+
+### Upstream
+- Same prompt exists upstream in `open-gsd/get-shit-done-redux` at `get-shit-done/workflows/plan-phase.md` §5.0. Filed enhancement issue and proposed the diff via issue comment (fork-PRs blocked on the redux per [[reference_upstream_gsd_contribution.md]] Gate 0).
+
+## [2.43.7] - 2026-05-23  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Workflow robustness fix and branding polish. Two workflows had `config-get workflow.nyquist_validation` calls that didn't supply a `--default` value: `workflows/validate-phase.md` was fully unguarded (would emit `Error: Key not found` to stderr and leave the variable empty when the key is unset), and `workflows/audit-milestone.md` redirected stderr but had no fallback (silent empty variable). The downstream "is the variable equal to false" checks behaved correctly by accident (empty != "false" treats absent-key as enabled, matching the documented default), but the stderr noise was real and the empty-variable trail through audit-milestone.md is the kind of silent-failure mode that breaks once a future patch adds a meaningful `--raw` consumer.
+
+### Fixed
+- **`workflows/validate-phase.md:28`**: `NYQUIST_CFG=$(gsd-sdk query config-get workflow.nyquist_validation --raw --default true)` (was missing `--default`, also missing `2>/dev/null` and `|| echo`). Now uses `--default true` to match the documented default-when-absent semantic and silence the stderr noise.
+- **`workflows/audit-milestone.md:146`**: Same fix. `--raw --default true` replaces `--raw 2>/dev/null`. Removes the silent-empty trap.
+
+### Changed
+- **README header**: dropped redundant "GSD Plugin --" prefix from H1 (the new branding logo above the H1 already conveys "GSD plugin"). Title is now "Get Shit Done for Claude Code".
+
+### Upstream
+- Same bugs exist in `open-gsd/get-shit-done-redux` at `get-shit-done/workflows/validate-phase.md` and `get-shit-done/workflows/audit-milestone.md`. Filed bug issue and patch PR following the redux contribution-rules ceremony (typed bug_report.yml form, fix.md PR template, `Fixes #NNN` link). PR pending maintainer triage for `confirmed-bug` label.
+
+## [2.43.6] - 2026-05-22  (based on upstream GSD 1.42.3, hosted at open-gsd/get-shit-done-redux)
+
+Upstream pointer change. The original `gsd-build/get-shit-done` repo was locked on 2026-05-22 after the founder rug-pulled the associated `$GSD` Solana token and deleted his social accounts (see [intellectia.ai](https://intellectia.ai/news/crypto/gsd-token-allegedly-rugpulled-after-founder-exit) and [ourcryptotalk](https://ourcryptotalk.com/news/bags-hackathon-winner-gsd-cloud-rug-pull) for independent coverage). Within hours, GSD collaborator [trek-e](https://github.com/trek-e) (Tom Boucher) launched a bit-perfect community continuation at [open-gsd/get-shit-done-redux](https://github.com/open-gsd/get-shit-done-redux): same MIT-licensed code, all 394 branches and 229 tags mirrored, all 77 open issues and 17 open PRs imported with cross-references. The plugin treats `open-gsd/get-shit-done-redux` as upstream from this release forward.
+
+No source code changed at the cutover. The redux is bit-perfect with the pre-rug tree; only URLs and npm package names move. The plugin still ships the same base-tree as v2.43.5 (upstream GSD 1.42.3) and the same `#PLUGIN-DEPS-ON-CASE-INSENSITIVE` patch. trek-e independently landed a more thorough version of that patch in redux as PR [#88](https://github.com/open-gsd/get-shit-done-redux/pull/88) (with collision-detection guard, canonical-casing assertions, and atomic SDK+CJS update); the plugin patch will retire naturally on the first redux-based sync.
+
+### Changed
+- **`README.md`**, top-of-file. Updated "Based on" line to point at the redux release tag, added a new "Upstream change (May 2026)" call-out documenting the rug-pull and migration with links to the two press articles and the redux's [migration announcement](https://github.com/open-gsd/get-shit-done-redux/discussions/109). Drift-resilience and "For users of upstream GSD" sections rewritten to reference the redux. Credits section updated to mention both the original (TACHES) and the new maintainer (trek-e + contributors).
+- **`workflows/forensics.md`, `workflows/update.md`, `workflows/help.md`, `workflows/new-project.md`, `workflows/new-milestone.md`, `workflows/quick.md`**. User-facing references to `gsd-build/get-shit-done` and the `get-shit-done-cc` npm package retargeted to `open-gsd/get-shit-done-redux` and `get-shit-done-redux`. `/gsd:forensics` issue-filing path now targets the redux for bug reports. `/gsd:update` recipe references the new npm package.
+- **Pre-install uninstall guidance.** Now lists both pre-rug (`get-shit-done-cc`, `@gsd-build/sdk`) and post-rug (`get-shit-done-redux`, `@gsd-redux/sdk`) global packages so users with either install can clear conflicts.
+
+### Added
+- **Short-form case-insensitive test** (`sdk/src/query/phase.test.ts`, 30 cases up from 29 in v2.43.5): a `05D` phase with `05D-02` declaring `depends_on: [01]` (bare short-form) referencing the uppercase-suffix plan `05D-01`. Exercises the `shortFormToId` lookup tier that the original v2.43.5 test (canonical-prefix form `05c-01`) did not cover. trek-e's upstream review on PR #3786 flagged this gap; the plugin now covers both.
+- **`bin/lib/phase.cjs`** comment block explicitly documenting that the CJS path supports a subset of the SDK's lookup forms (full plan ID + canonical prefix only, no short-form). Closes a parity question raised in trek-e's upstream review.
+
+### Deferred to first redux-based sync
+- **`bin/maintenance/check-upstream-schema.cjs`** still references `gsd-build/get-shit-done` for the upstream tarball download. The redux's release tarball naming (`get-shit-done-redux-<version>/`) differs from gsd-build's (`get-shit-done-<version>/`). Since gsd-build's frozen v1.42.3 tarball is still downloadable and the plugin remains on v1.42.3, this script keeps working without changes until the first redux-based sync. Tracked in [[project_upstream_switch_2026_05]] memory.
+- **`sdk/package.json` / `sdk/README.md`** still self-identify as `@gsd-build/sdk`. These are bundled build artifacts not exposed via npm to plugin users; they will rename on the first redux-based sync.
+
+## [2.43.5] - 2026-05-21  (based on upstream GSD 1.42.3)
+
+Robustness fix in plan-id resolution. The `phase.plan-index` query now resolves `depends_on` references case-insensitively, so a plan with frontmatter `depends_on: [05c-01]` matches a sibling plan whose filename is `05C-01-PLAN.md` (and vice versa). Previously the lookup was strict-case via `Map.has()` on the raw plan ID, which silently dropped the edge, collapsed the dependent into wave 1, and surfaced a misleading "declared wave: N but depends_on DAG places it in wave 1" warning. Real-world repro: plans authored by the `gsd-planner` agent occasionally lowercase letter-suffix phases (e.g. `05c` while files are `05C`), and the dropped edge would only surface once execution ordering produced a downstream failure.
+
+### Fixed
+- **`sdk/src/query/phase.ts`** and **`bin/lib/phase.cjs`** (parallel CJS) plan-id lookup maps (`planMap`, `canonicalToId`, `shortFormToId`) now key on the lowercased plan ID, and `dep` is lowercased at lookup time. Resolved deps preserve the canonical-cased plan ID stored as the map value, so output wave assignments and warning messages still use the on-disk casing. The collision surface is negligible: the plan-id namespace is `NN`, `NN-NN`, or `NN-NN-slug` with an optional letter suffix on the phase segment, and a single phase directory cannot host two plans whose IDs differ only in case (POSIX filesystems treat them as distinct files, but the second file would still collide on canonical-prefix indexing).
+
+### Added
+- **Test coverage**, new `phase.test.ts` case (30 total, up from 29): a `05C` phase with an uppercase-suffix plan `05C-01-PLAN.md` and a sibling `05C-02-PLAN.md` whose `depends_on: [05c-01]` uses lowercase canonical-prefix form. Asserts wave 1 contains `05C-01`, wave 2 contains `05C-02`, and `warnings` is empty (no unresolved-reference warning, no wave-mismatch warning).
+
+### Plugin patches added
+- **`sdk/src/query/phase.ts` + `bin/lib/phase.cjs`** (`#PLUGIN-DEPS-ON-CASE-INSENSITIVE`) tracked in the plugin-patches inventory. Proposed to upstream `gsd-build/get-shit-done` in a separate PR (see commit message for link). If upstream accepts, the markers can be retired during a future sync cycle.
+
+## [2.43.4] - 2026-05-19  (based on upstream GSD 1.42.3)
+
+Discoverability fix. Adds a SessionStart hook that nudges users with stale caches to run `/plugin marketplace update`. Triggered by the fourth re-report of the v2.40.2-fixed MCP framing bug from a user on v2.38.x ([#7](https://github.com/jnuyens/gsd-plugin/issues/7)): the bug has been gone for 12 days, but the marketplace does not auto-update by default and four reporters in a row didn't run the update recipe even though the README documents it.
+
+### Added
+- **`hooks/gsd-staleness-reminder.js`** (`SessionStart`) reads the plugin's `CHANGELOG.md`, parses the topmost `## [X.Y.Z] - YYYY-MM-DD` entry, computes the age in days, and if older than the staleness threshold (default 14 days, override via `GSD_STALENESS_DAYS` env var) emits a structured `additionalContext` advisory naming the installed version, age, threshold, and the exact 3-command refresh recipe (`/plugin marketplace update`, `/plugin install gsd@gsd-plugin`, `/reload-plugins`). Silent when the cache is fresh, when `CHANGELOG.md` is unreadable, or when no valid release-date entry is found (defensive failure mode is silence, not noise).
+- **Test coverage**, four new sub-cases in `tests/hooks-smoke.test.cjs` (20 total, up from 16): silent when fresh, warns when 30 days stale, silent when CHANGELOG missing, honors `GSD_STALENESS_DAYS=7` override at 10 days.
+
+### Background
+- Issues [#1](https://github.com/jnuyens/gsd-plugin/issues/1), [#2](https://github.com/jnuyens/gsd-plugin/issues/2), [#3](https://github.com/jnuyens/gsd-plugin/issues/3), and [#7](https://github.com/jnuyens/gsd-plugin/issues/7) all reported the same MCP framing bug. All four reporters were on v2.38.x; the fix has been on master since v2.40.2 (2026-05-07). The v2.38.x README's "Updating" section already documents the correct recipe, so docs are not the gap; the gap is friction between "user starts a session" and "user thinks to update". A SessionStart advisory closes that gap without requiring user opt-in.
+- This is the third user-protection hook in the SessionStart chain after v2.43.1's `gsd-shadowing-sdk-detector.js` (shadowing global SDK in PATH) and the long-standing `gsd-session-state.sh` (project state reminder). The chain is now 4 entries: dispatcher, session-state, shadowing-detector, staleness-reminder.
+
+### Recommended user response
+When the advisory fires, run the 3-command refresh recipe. The advisory will then disappear until the next 14-day window. If a user wants the threshold tighter or looser, they can set `GSD_STALENESS_DAYS` in their environment.
+
+## [2.43.3] - 2026-05-17  (based on upstream GSD 1.42.3)
+
+Upstream hotfix sync from v1.42.2 to v1.42.3 (35 commits, primarily phase-removal logic hardening and a `plan-phase` closed-phase guard). All 4 in-tree plugin patches and the 3 SDK source patch markers survive automatically this cycle because upstream did not touch the patched files; only `bin/lib/core.cjs` required surgical re-apply of the `#PLUGIN-AGENTS-DIR` blocks. The bundled SDK was rebuilt because 8 other `sdk/src/` modules changed.
+
+### Changed
+- **Version bump**, plugin `2.43.2` to `2.43.3`.
+- Refreshed wholesale from upstream: `agents/` (5 files), `bin/lib/` (8 files), `sdk/src/` (8 files including 1 new test), `workflows/` (4 files).
+- Rebundled `sdk/dist/cli.js` via `tsc + esbuild`; bundle is 1.66 MB and carries 3 `CLAUDE_PLUGIN_ROOT` matches.
+
+### Fixed (selected upstream highlights)
+- **Phase removal logic hardening** (v1.42.3, [#3599](https://github.com/gsd-build/get-shit-done/pull/3599), [#3600](https://github.com/gsd-build/get-shit-done/pull/3600), [#3601](https://github.com/gsd-build/get-shit-done/pull/3601), [#3602](https://github.com/gsd-build/get-shit-done/pull/3602)) prefixed-phase headings now treated as section boundaries, peer-depth decimal phase preservation on integer phase removal, slugged plan-ref renumbering on phase removal, and project-code-prefixed phase dir counting in the milestone filter.
+- **`plan-phase` gated on closed phases** (v1.42.3, [#3569](https://github.com/gsd-build/get-shit-done/pull/3569)) `init.plan-phase` surfaces `phase_status`; `/gsd:plan-phase` errors out on closed phases instead of silently re-planning.
+- **W007 warning ignores archived phases** (v1.42.3, [#3560](https://github.com/gsd-build/get-shit-done/pull/3560)) repos using a milestone-archive layout no longer get false-positive "Phase N in ROADMAP but no directory" warnings for archived phases.
+- **Codex install hardening** (v1.42.3, [#3610](https://github.com/gsd-build/get-shit-done/pull/3610)) fresh Codex installs no longer block when leftover bundled hooks are present in the project tree.
+- **Installer migration env override** (v1.42.3) `GSD_INSTALLER_MIGRATION_DIR` honored when resolving the migrations directory.
+
+### Added
+- **Antigravity first-class runtime** (v1.42.3, [#3608](https://github.com/gsd-build/get-shit-done/pull/3608)) `update.md` models Antigravity (Google's IDE) as a first-class runtime alongside Claude Code, Cursor, Codex, and the existing runtime list.
+
+### Plugin patches preserved verbatim
+- **`bin/lib/core.cjs`** (`#PLUGIN-AGENTS-DIR`) upstream modified `core.cjs` this cycle; the 2x `[PLUGIN PATCH]` blocks (`resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset` helper exports plus the patched `getAgentsDir` body) were re-applied surgically after the wholesale copy.
+- **`bin/lib/model-catalog.cjs`** (`#PLUGIN-MODEL-CATALOG-PATH`) upstream did NOT modify this file v1.42.2..v1.42.3; the flat-layout candidate-prepend patch survives automatically.
+- **`bin/gsd-tools.cjs`** upstream did NOT modify this file v1.42.2..v1.42.3; 4 dispatch cases (`write-phase-memory`, `checkpoint`, `hook`, `migrate`) survive automatically.
+- **`hooks/gsd-context-monitor.js`** (`#PLUGIN-HOOK-CONTEXT-MONITOR`) upstream `hooks/` entirely unchanged v1.42.2..v1.42.3; patch survives automatically.
+- **`sdk/src/query/state-project-load.ts` + `sdk/src/query-gsd-tools-path.ts` + `sdk/src/sdk-package-compatibility.ts::legacyAssetProbes`** (SDK source patches) none of the 3 patched files appear in the upstream sdk/src/ diff this cycle; patches survive automatically. Bundle still carries 3 `CLAUDE_PLUGIN_ROOT` matches.
+
+### Plugin-owned (untouched by sync)
+- `bin/gsd-sdk` + `bin/gsd-sdk.cmd` (`#PLUGIN-WRAPPER-ENV-EXPORT`) byte-identical (sha256 verified pre/post sync).
+- `hooks/gsd-shadowing-sdk-detector.js` (added in v2.43.1) byte-identical (sha256 verified pre/post sync).
+- `commands/` remains absent (per plugin policy).
+
+### Tests
+- Regression trifecta passes against the synced tree: `tests/mcp-stdio-framing.test.cjs` (8 tools), `tests/workspace-json-integration.test.cjs` (22 checks), `tests/hooks-smoke.test.cjs` (16/16 including the v2.43.1 shadowing-sdk-detector cases).
+
+See full upstream release notes: <https://github.com/gsd-build/get-shit-done/releases/tag/v1.42.3>
+
+## [2.43.2] - 2026-05-17  (based on upstream GSD 1.42.2)
+
+Docs hotfix on v2.43.1. Replaces the misleading README claim that a pre-v2.42.0 global `gsd-sdk` install "keeps working" with explicit pre-install uninstall instructions. The shadowing global at `/opt/homebrew/bin/gsd-sdk` (or `/usr/local/bin/gsd-sdk`) does NOT honor `CLAUDE_PLUGIN_ROOT` and causes `agents_installed: false` in `/gsd:new-project` and similar workflows, so users with a legacy install must remove it before the plugin can resolve its bundled agents. v2.43.1's runtime SessionStart detector now has a matching README entry to send users to.
+
+### Changed
+- **README** Replaced "No prerequisites" wording that downplayed pre-v2.42.0 shadowing globals as "no breakage". Added a new "Pre-install: remove any pre-v2.42.0 global SDK install" subsection with the `which gsd-sdk` diagnostic, the two `npm uninstall -g` commands (`@gsd-build/sdk` and `get-shit-done-cc`), expected post-uninstall outputs, and a forward reference to the v2.43.1 SessionStart detector for users who skip the step.
+
+## [2.43.1] - 2026-05-15  (based on upstream GSD 1.42.2)
+
+Hotfix on v2.43.0. Adds a SessionStart hook that detects a shadowing `gsd-sdk` binary on `$PATH` (typically a leftover `npm install -g get-shit-done-cc` or `@gsd-build/sdk` from the pre-v2.42.0 prerequisite era) and emits a one-time advisory recommending the user uninstall it. The shadowing global takes PATH precedence over the plugin's bundled wrapper, does not honor `CLAUDE_PLUGIN_ROOT`, and causes spurious `agents_installed: false` reports in `/gsd:new-project` and similar workflows.
+
+### Added
+- **`hooks/gsd-shadowing-sdk-detector.js`** (`SessionStart`) cross-platform PATH walker. Resolves symlinks before comparing against the plugin's bundled wrapper at `${CLAUDE_PLUGIN_ROOT}/bin/gsd-sdk`. Silent when no shadowing is detected. Emits a structured `additionalContext` payload pointing at the offending binary and giving the exact `npm uninstall` recipe.
+- **Test coverage**, three new sub-cases in `tests/hooks-smoke.test.cjs` (16 total, previously 13): silent when only the plugin wrapper is in PATH, silent when no `gsd-sdk` is in PATH, warns when a non-plugin `gsd-sdk` is first in PATH. Validates JSON envelope shape and the presence of the `npm uninstall` guidance.
+
+### Background
+- The plugin v2.42.0 bundled `sdk/dist/cli.js` so the standalone `get-shit-done-cc` / `@gsd-build/sdk` npm package became unnecessary. Pre-v2.42.0 users who installed it via `npm -g` are still affected on every session.
+- The v2.42.5 `#PLUGIN-WRAPPER-ENV-EXPORT` patch exports `CLAUDE_PLUGIN_ROOT` and `GSD_AGENTS_DIR` from the plugin's wrapper, but only fires when the wrapper itself is invoked. With a shadowing global in `$PATH`, the wrapper is bypassed and the patch is silent. v2.43.1 closes the loop with first-line user-visible diagnosis.
+
+### Recommended user action
+If the SessionStart advisory fires, run `npm uninstall -g @gsd-build/sdk` (and `npm uninstall -g get-shit-done-cc` if also installed). `which gsd-sdk` should then resolve to a path under `.claude/plugins/cache/gsd-plugin/`.
+
+## [2.43.0] - 2026-05-15  (based on upstream GSD 1.42.2)
+
+Upstream patch sync, picks up GSD 1.42.0 + 1.42.1 + 1.42.2 (published 2026-05-15). The plugin skipped intermediate v1.42.0 (RC pattern) and v1.42.1 via the daily-sync cadence change; this single bump consolidates all three patch releases plus the post-merge work that landed at v1.42.2. SDK source patch surface evolved (upstream consolidated CLAUDE_PLUGIN_ROOT probes into `sdk-package-compatibility.ts::legacyAssetProbes`), surgically re-applied. Bundled SDK rebundled, 1.66 MB, contains 3 CLAUDE_PLUGIN_ROOT matches (one per patched module + the consolidated probe).
+
+### Changed
+- **Version bump**, plugin `2.42.6 to 2.43.0`.
+- **`agents/`** refreshed wholesale (28 of 33 files updated, 5 new from upstream).
+- **`bin/lib/*`** refreshed wholesale (61 upstream `.cjs` files plus a new `installer-migrations/` subdir with 3 baseline scripts).
+- **`bin/gsd-tools.cjs`** refreshed; 4 plugin dispatch cases (`write-phase-memory`, `checkpoint`, `hook`, `migrate`) re-inserted before the `default:` block.
+- **`hooks/gsd-context-monitor.js` + `hooks/gsd-workflow-guard.js`** refreshed.
+- **`sdk/src/*`** refreshed wholesale (~70 TypeScript modules including new `sdk-package-compatibility.ts` seam).
+- **`workflows/` + `templates/` + `references/`** refreshed from upstream `get-shit-done/{workflows,templates,references}/`.
+- **`sdk/dist/cli.js`** rebundled via `npm run build` (`tsc + esbuild`); 1.66 MB single-file ESM bundle with `createRequire` shim.
+
+### Added (selected upstream highlights)
+- **STATE.md Document Module via generator** (v1.42.2, [#3531](https://github.com/gsd-build/get-shit-done/pull/3531)) Phase 1 of #3524, the CJS to SDK hard-seam ADR. Generated STATE.md surface enforces consistent shape across runtimes.
+- **`init.phase-op` / `init.plan-phase` expose `expected_phase_dir`** (v1.42.1, [#3287](https://github.com/gsd-build/get-shit-done/pull/3287)) projects with `project_code` set no longer accumulate two-headed naming conventions (`01-foundation/` mixed with `XR-02.1-spike/`).
+- **Statusline `context_position` config** (v1.42.x, [#2937](https://github.com/gsd-build/get-shit-done/pull/2937)) opt-in narrow-terminal layout for context utilization indicator.
+- **`gsd-sdk query commit --respect-staged`** (v1.42.x, [#3522](https://github.com/gsd-build/get-shit-done/pull/3522)) opt-in flag so SDK-driven commits no longer silently overwrite staged files.
+
+### Fixed (selected upstream highlights)
+- **ROADMAP regex consolidation** (v1.42.2, [#3538](https://github.com/gsd-build/get-shit-done/pull/3538)) every phase-number ROADMAP regex now routes through `phaseMarkdownRegexSource`; fixes spurious "phase in ROADMAP but no directory" warnings on milestone-archive layouts.
+- **`buildStateFrontmatter` counts nested plans** (v1.42.1, [#3261](https://github.com/gsd-build/get-shit-done/pull/3261)) repos using the nested `plans/<N>-PLAN-<NN>-<slug>.md` layout no longer get `progress.*` counters silently overwritten downward on every state mutation.
+- **Self-healing migration of legacy top-level `branching_strategy`** (v1.42.x, [#3523](https://github.com/gsd-build/get-shit-done/pull/3523)) CJS `loadConfig` no longer emits false-positive warnings for legacy config schemas.
+- **`phase.complete` refreshes all STATE.md fields** (v1.42.x, [#3517](https://github.com/gsd-build/get-shit-done/pull/3517)) phase completion now derives `completed_phases` from ROADMAP and rewrites the full body+frontmatter, fixing STATE drift after `phase complete`.
+- **`reapply-patches` `gsd-update` filter arm** (v1.42.x, [#3516](https://github.com/gsd-build/get-shit-done/pull/3516)) missing arm in two-way merge filter was silently skipping update-flow patches.
+- **`quick.md` cleanup-loop CWD safety** (v1.42.x, [#3521](https://github.com/gsd-build/get-shit-done/pull/3521)) bare `git` commands in the quick-task cleanup loop now pin CWD to project root before executing.
+
+### Plugin patches preserved verbatim
+- **`bin/lib/core.cjs`** (`#PLUGIN-AGENTS-DIR`) `resolveGsdRoot` / `resolveGsdDataDir` / `resolveGsdAsset` helper exports + the `getAgentsDir()` plugin-flat preference. Upstream `core.cjs` diff was substantial (~500 lines); patch surgically re-inserted at lines 21 and 1284 (HEAD), `[PLUGIN PATCH]` markers intact.
+- **`bin/lib/model-catalog.cjs`** (`#PLUGIN-MODEL-CATALOG-PATH`) flat-layout candidate prepended to upstream's 3-candidate resolver list. Upstream resolver shape unchanged this cycle; folded in as candidate #0 same as v2.42.4.
+- **`bin/gsd-tools.cjs`** 4 dispatch cases (`write-phase-memory`, `checkpoint`, `hook`, `migrate`). Hook subtypes (`session-start`, `pre-compact`, `post-tool-use`, `stop`) preserved; re-inserted as a block before the `default:` clause.
+- **`hooks/gsd-context-monitor.js`** (`#PLUGIN-HOOK-CONTEXT-MONITOR`) drops the `get-shit-done` segment from `__dirname` traversal + honors `GSD_TOOLS_PATH` env override. Re-applied at line 138, marker intact.
+- **`sdk/src/query/state-project-load.ts` + `sdk/src/query-gsd-tools-path.ts`** (SDK source patches) upstream v1.42.2 consolidated the CLAUDE_PLUGIN_ROOT probe logic into `sdk-package-compatibility::legacyAssetProbes`. Patch evolved: the functional probe lives in the consolidated helper (prepending a plugin-flat candidate), while `[PLUGIN PATCH]` markers + module-load `CLAUDE_PLUGIN_ROOT` references stay in both target files so the bundled SDK carries one match per patched module (gate expects >=2; bundle now carries 3).
+
+### Plugin-owned (untouched by sync)
+- `bin/gsd-sdk` + `bin/gsd-sdk.cmd` (`#PLUGIN-WRAPPER-ENV-EXPORT`) byte-identical (sha256 verified pre/post sync).
+- `bin/maintenance/`, `bin/validate-plugin.cjs`, `hooks/gsd-prompt-guard.js`, `hooks/gsd-read-guard.js`, `hooks/gsd-read-injection-scanner.js`, `hooks/gsd-validate-commit.sh`, `hooks/gsd-phase-boundary.sh`, `hooks/gsd-session-state.sh`, `hooks/lib/` upstream did not change these between v1.41.2 and v1.42.2, so they remain in place.
+- `commands/` remains absent (per plugin policy, see memory entry "No bundled commands/").
+
+### Excluded from this pass
+- `hooks/gsd-statusline.js`, `hooks/gsd-update-banner.js` upstream-only, plugin does not ship.
+- `gsd-check-update.js` deferred indefinitely (decision from v2.42.6 retained).
+
+### Tests
+- Regression trifecta passes against the synced tree: `tests/mcp-stdio-framing.test.cjs` (8 tools), `tests/workspace-json-integration.test.cjs` (22 checks), `tests/hooks-smoke.test.cjs` (13/13).
+
+See full upstream release notes: <https://github.com/gsd-build/get-shit-done/releases/tag/v1.42.2>
+
 ## [2.42.7] - 2026-05-14  (based on upstream GSD 1.41.2)
 
 Disable the `gsd-context-monitor.js` PostToolUse hook by removing its `hooks.json` registration. The script file stays in `hooks/` for upstream-merge friendliness; only the registration block is removed.
